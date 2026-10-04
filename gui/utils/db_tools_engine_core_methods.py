@@ -248,11 +248,13 @@ def preview_merge(self, external_db_path: str) -> Dict[str, Any]:
             ext_cursor.execute("SELECT COUNT(*) FROM file_manifests")
             total_files = ext_cursor.fetchone()[0]
 
+        host_data_counts = self._preview_merge_host_data(ext_conn, cur_conn, warnings)
         ext_conn.close()
         cur_conn.close()
 
         return {
             'valid': True,
+            **host_data_counts,
             'external_servers': external_servers,
             'new_servers': new_servers,
             'existing_servers': existing_servers,

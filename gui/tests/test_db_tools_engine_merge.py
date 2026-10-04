@@ -1,6 +1,7 @@
 """DBToolsEngine merge-related tests split from test_db_tools_engine.py."""
 
 from gui.tests.test_db_tools_engine import *  # noqa: F401,F403
+from datetime import date
 
 class TestMergeOperations:
     """Tests for database merge operations."""
@@ -143,8 +144,8 @@ class TestMergeOperations:
             except Exception:
                 pass
 
-    def test_merge_does_not_import_user_flags(self, populated_db, external_db):
-        """Merge preserves local user flags (doesn't import from external)."""
+    def test_merge_combines_user_flags(self, populated_db, external_db):
+        """Merge keeps local notes and appends differing external notes."""
         # Add user flags to external DB
         conn = sqlite3.connect(external_db)
         conn.execute("""
@@ -168,7 +169,8 @@ class TestMergeOperations:
         conn.close()
 
         assert row is not None
-        assert row['notes'] == 'Important server'  # Original note preserved
+        merged_line = f"--- merged {date.today().isoformat()} ---"
+        assert row['notes'] == f"Important server\n{merged_line}\nExternal note"
 
     def test_merge_rollback_on_partial_failure(self, populated_db):
         """

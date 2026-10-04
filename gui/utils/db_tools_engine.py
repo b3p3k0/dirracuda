@@ -119,6 +119,10 @@ class MergeResult:
     vulnerabilities_imported: int = 0
     file_manifests_imported: int = 0
     failure_logs_imported: int = 0
+    snapshots_imported: int = 0
+    probe_cache_imported: int = 0
+    user_flags_merged: int = 0
+    sherlock_results_imported: int = 0
     errors: List[str] = field(default_factory=list)
     warnings: List[str] = field(default_factory=list)
     duration_seconds: float = 0.0
@@ -206,6 +210,7 @@ class DBToolsEngine:
 
 from gui.utils.db_tools_engine_core_methods import bind_db_tools_engine_core_methods
 from gui.utils.db_tools_engine_merge_methods import bind_db_tools_engine_merge_methods
+from gui.utils.db_tools_engine_merge_host_data_methods import bind_db_tools_engine_merge_host_data_methods
 from gui.utils.db_tools_engine_maintenance_methods import bind_db_tools_engine_maintenance_methods
 
 _SHARED_BIND_SYMBOLS: Dict[str, Any] = {
@@ -244,6 +249,7 @@ _SHARED_BIND_SYMBOLS: Dict[str, Any] = {
 
 bind_db_tools_engine_core_methods(DBToolsEngine, _SHARED_BIND_SYMBOLS)
 bind_db_tools_engine_merge_methods(DBToolsEngine, _SHARED_BIND_SYMBOLS)
+bind_db_tools_engine_merge_host_data_methods(DBToolsEngine, _SHARED_BIND_SYMBOLS)
 bind_db_tools_engine_maintenance_methods(DBToolsEngine, _SHARED_BIND_SYMBOLS)
 
 def get_db_tools_engine(db_path: str) -> DBToolsEngine:

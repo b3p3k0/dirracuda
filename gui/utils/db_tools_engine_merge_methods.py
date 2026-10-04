@@ -227,6 +227,25 @@ def merge_database(
                 ext_conn, cur_conn, smb_id_mapping, import_session_id
             )
 
+            host_id_maps = {"S": smb_id_mapping, "F": ftp_id_mapping, "H": http_id_mapping}
+            progress(85, "Importing probe snapshots...")
+            snapshot_id_map, inserted_snapshots = self._import_probe_snapshots(
+                ext_conn, cur_conn, host_id_maps, result
+            )
+            self._import_probe_snapshot_children(
+                ext_conn, cur_conn, inserted_snapshots, result
+            )
+            progress(86, "Importing probe caches...")
+            self._import_probe_caches(
+                ext_conn, cur_conn, host_id_maps, snapshot_id_map, strategy, result
+            )
+            progress(87, "Combining user flags...")
+            self._import_user_flags(ext_conn, cur_conn, host_id_maps, result)
+            progress(88, "Importing Sherlock results...")
+            self._import_sherlock_results(
+                ext_conn, cur_conn, host_id_maps, snapshot_id_map, strategy, result
+            )
+
             # Phase 5: Import failure logs
             progress(90, "Importing failure logs...")
             result.failure_logs_imported = self._import_failure_logs(

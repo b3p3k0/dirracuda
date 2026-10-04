@@ -364,7 +364,11 @@ class DBToolsDialog:
             f"Existing servers: {preview['existing_servers']} (will be merged per strategy)\n"
             f"Total shares: {preview['total_shares']}\n"
             f"Total vulnerabilities: {preview['total_vulnerabilities']}\n"
-            f"Total file manifests: {preview['total_file_manifests']}"
+            f"Total file manifests: {preview['total_file_manifests']}\n"
+            f"Total snapshots: {preview.get('total_snapshots', 0)}\n"
+            f"Total probe cache rows: {preview.get('total_probe_cache', 0)}\n"
+            f"Total user flags: {preview.get('total_user_flags', 0)}\n"
+            f"Total Sherlock results: {preview.get('total_sherlock_results', 0)}"
         )
         warnings = preview.get('warnings') or []
         if warnings:
@@ -498,7 +502,11 @@ class DBToolsDialog:
                     f"Servers skipped: {result.servers_skipped}\n"
                     f"Shares imported: {result.shares_imported}\n"
                     f"Vulnerabilities imported: {result.vulnerabilities_imported}\n"
-                    f"File manifests imported: {result.file_manifests_imported}"
+                    f"File manifests imported: {result.file_manifests_imported}\n"
+                    f"Snapshots imported: {result.snapshots_imported}\n"
+                    f"Probe cache rows imported: {result.probe_cache_imported}\n"
+                    f"User flags merged: {result.user_flags_merged}\n"
+                    f"Sherlock results imported: {result.sherlock_results_imported}"
                 )
                 if result.backup_path:
                     summary += f"\n\nBackup created: {os.path.basename(result.backup_path)}"

@@ -144,3 +144,9 @@ Options that were offered:
 | # | Question | Options | Recommendation |
 |---|---|---|---|
 | Q3 | Flags and notes when the target already has a row for that host | (a) The target's flags win. Fill the target's notes only when they are empty. (b) Apply `strategy` on `updated_at`, like the cache. (c) Flags: OR (a favorite stays a favorite). Notes: append the source notes under a `--- merged <date> ---` line when they differ. | (c). It never loses anyone's notes and never removes a flag. (b) can overwrite local notes silently. |
+
+## Card log
+
+| Card | State | Notes |
+|---|---|---|
+| CM | Accepted (RA, 2026-10-04) | DA: Codex. `snapshot_hash` is content-only (`database_access_write_methods.py:311`), so cross-host hash reuse is skipped with a warning. RA updated `test_merge_does_not_import_user_flags` → `test_merge_combines_user_flags` to match Q3. Pre-existing gui failures on clean HEAD (not CM): 2× `test_sherlock_post_probe` SMB hook, `test_clamav_results_dialog` batch extract, `test_extract_runner_clamav` batch extract. |
