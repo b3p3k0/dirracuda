@@ -108,3 +108,49 @@ def test_failed_save_can_retry_on_close(tmp_path):
     controller.flush()
     controller._flush_event(SimpleNamespace(widget=win))
     assert settings.set_setting.call_count == 2
+
+
+@pytest.mark.parametrize("geometry", ["960x800+120+70", "960x800-20-30", "960x800+-500+-200"])
+def test_full_geometry_survives_resize_close_and_new_settings_instance(tmp_path, geometry):
+    settings = SettingsManager(str(tmp_path))
+    win = window("860x760+20+30")
+    controller = remember_window_position(win, "app_config", settings, remember_size=True)
+    event = SimpleNamespace(widget=win)
+    controller._moved(event)
+    controller.flush()
+    win.geometry.return_value = geometry
+    controller._moved(event)
+    # Closing before the debounce expires must preserve the latest dimensions.
+    win.geometry.side_effect = AssertionError("window already destroyed")
+    controller._flush_event(event)
+    reopened = window()
+    remember_window_position(
+        reopened, "app_config", SettingsManager(str(tmp_path)), remember_size=True
+    )
+    reopened.geometry.assert_called_once_with(geometry)
+
+
+def test_full_geometry_ignores_maximized_and_child_configure_events(tmp_path):
+    settings = SettingsManager(str(tmp_path))
+    win = window("960x800+120+70")
+    controller = remember_window_position(win, "app_config", settings, remember_size=True)
+    event = SimpleNamespace(widget=win)
+    controller._moved(event)
+    win.geometry.return_value = "1920x1080+0+0"
+    controller._moved(SimpleNamespace(widget=object()))
+    win.state.return_value = "zoomed"
+    controller._moved(event)
+    win.state.return_value = "normal"
+    win.attributes.return_value = True
+    controller._moved(event)
+    controller._flush_event(event)
+    assert settings.get_setting("windows.app_config.geometry") == "960x800+120+70"
+
+
+@pytest.mark.parametrize("invalid", [None, True, 42, [], {}, "center", "+20+30", "badxsize+2+3"])
+def test_invalid_full_geometry_keeps_default(tmp_path, invalid):
+    settings = SettingsManager(str(tmp_path))
+    settings.set_setting("windows.app_config.geometry", invalid)
+    win = window()
+    remember_window_position(win, "app_config", settings, remember_size=True)
+    win.geometry.assert_not_called()

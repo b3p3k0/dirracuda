@@ -36,6 +36,7 @@ from gui.components.app_config_security_tab import (
 )
 from gui.utils.scrollable_body import ScrollableBody
 from gui.utils.style import get_theme
+from gui.utils.window_positions import remember_window_position
 from shared.db_path_resolution import (
     auto_detect_database_path,
     normalize_database_path,
@@ -450,6 +451,9 @@ class AppConfigDialog:
         bind_close_shortcuts(self.dialog, self._on_cancel)
 
         self.theme.apply_theme_to_application(self.dialog)
+        remember_window_position(
+            self.dialog, "app_config", self.settings_manager, remember_size=True
+        )
         ensure_dialog_focus(self.dialog, self.parent)
 
     def _center_window(self) -> None:

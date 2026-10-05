@@ -1,4 +1,4 @@
-"""Remember per-window positions without changing size, focus, or monitor layout."""
+"""Remember per-window placement without changing focus or monitor layout."""
 
 import logging
 import re
@@ -11,29 +11,33 @@ _GEOMETRY = re.compile(r"\d+x\d+([+-]-?\d{1,9}[+-]-?\d{1,9})", re.ASCII)
 _logger = logging.getLogger(__name__)
 
 
-def remember_window_position(window, name, settings_manager=None):
+def remember_window_position(window, name, settings_manager=None, *, remember_size=False):
     """Restore after default placement, before display; save settled moves.
 
     Position is Tk's geometry suffix, retaining its left/right and top/bottom
     anchoring, including signed offsets. Never clamp it to the screen rectangle:
     that rectangle can contain gaps between physical monitors.
+    Opt into remember_size to persist the full geometry instead of position only.
     """
-    controller = _WindowPosition(window, name, settings_manager)
+    controller = _WindowPosition(window, name, settings_manager, remember_size)
     # Retain the controller for the lifetime of this window and its callbacks.
     window._position_memory = controller
     return controller
 
 
 class _WindowPosition:
-    def __init__(self, window, name, settings_manager):
+    def __init__(self, window, name, settings_manager, remember_size=False):
         self.window = window
         self.name = name
+        self.remember_size = remember_size
+        self.key = f"windows.{name}.{'geometry' if remember_size else 'position'}"
         self.settings = settings_manager if settings_manager is not None else get_settings_manager()
         self.timer = None
         self.pending = None
         self.saved = None
-        value = self.settings.get_setting(f"windows.{name}.position", None)
-        if isinstance(value, str) and _POSITION.fullmatch(value):
+        value = self.settings.get_setting(self.key, None)
+        pattern = _GEOMETRY if remember_size else _POSITION
+        if isinstance(value, str) and pattern.fullmatch(value):
             try:
                 window.geometry(value)
                 self.saved = value
@@ -60,7 +64,7 @@ class _WindowPosition:
             match = _GEOMETRY.fullmatch(geometry)
             if not match:
                 return
-            position = match.group(1)
+            position = geometry if self.remember_size else match.group(1)
             if position == self.pending or (self.pending is None and position == self.saved):
                 return
             self.pending = position
@@ -87,7 +91,7 @@ class _WindowPosition:
         if self.pending is None or self.pending == self.saved:
             return
         try:
-            if self.settings.set_setting(f"windows.{self.name}.position", self.pending) is not False:
+            if self.settings.set_setting(self.key, self.pending) is not False:
                 self.saved = self.pending
                 self.pending = None
         except Exception:
