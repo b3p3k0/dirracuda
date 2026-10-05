@@ -64,6 +64,13 @@ connection), so the serialization comes from the **lock**, not from a shared
 connection object. Removing/narrowing the lock requires WAL to stay safe —
 see D2.
 
+> **PA erratum (2026-10-05):** the journal-mode facts below were read from
+> `~/.dirracuda/dirracuda.db`, a 0-byte legacy stub. The runtime DB is
+> `~/.dirracuda/data/dirracuda.db` and is already **WAL**. `busy_timeout` and
+> `synchronous` are per-connection values, not file state. Also, the GUI probe
+> runners do not sleep; the §2.2 S2 delays pace CLI SMB scans and extract only.
+> Decisions are unchanged. See `PLAN_PA.md` §2 for the full correction table.
+
 **Journal-mode facts (verified on the live DB 2026-10-05):**
 - Live `~/.dirracuda/dirracuda.db` is currently `journal_mode=delete`,
   `busy_timeout=5000`, `synchronous=2` (FULL). **WAL is NOT currently active.**
