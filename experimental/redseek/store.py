@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import List, Optional
 
 from experimental.redseek.models import RedditIngestState, RedditPost, RedditTarget
+from shared.db_connection import configure_primary_connection
 from shared.path_service import get_paths, get_legacy_paths, select_existing_path
 
 
@@ -131,7 +132,7 @@ def init_db(path: Optional[Path] = None) -> None:
     resolved = get_db_path(path)
     resolved.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(str(resolved)) as conn:
-        conn.execute("PRAGMA journal_mode=WAL")
+        configure_primary_connection(conn)
         conn.execute("PRAGMA foreign_keys=ON")
         conn.execute(_DDL_POSTS)
         conn.execute(_DDL_TARGETS)
@@ -236,6 +237,7 @@ def open_connection(path: Optional[Path] = None) -> sqlite3.Connection:
             f"reddit sidecar DB not found at {resolved} — call init_db() first"
         )
     conn = sqlite3.connect(str(resolved))
+    configure_primary_connection(conn)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys=ON")
     _check_schema(conn)
@@ -457,6 +459,7 @@ def wipe_ingest_state(path: Optional[Path] = None) -> None:
     resolved = get_db_path(path)
     init_db(resolved)
     with sqlite3.connect(str(resolved)) as conn:
+        configure_primary_connection(conn)
         conn.execute("PRAGMA foreign_keys=ON")
         conn.execute("DELETE FROM reddit_ingest_state")
         conn.commit()

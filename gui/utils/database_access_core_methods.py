@@ -28,6 +28,7 @@ def _ensure_http_columns(self) -> None:
     This helper is idempotent and safe to run at startup.
     """
     with sqlite3.connect(self.db_path) as conn:
+        configure_primary_connection(conn)
         cur = conn.cursor()
         table_row = cur.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name='http_servers'"

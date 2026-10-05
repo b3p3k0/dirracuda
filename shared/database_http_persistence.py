@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Set, Tuple
 
 from shared.db_migrations import run_migrations
+from shared.db_connection import configure_primary_connection
 
 class HttpPersistence:
     """
@@ -77,6 +78,7 @@ class HttpPersistence:
 
         try:
             with sqlite3.connect(self.db_path) as conn:
+                configure_primary_connection(conn)
                 for i in range(0, len(ips_list), batch_size):
                     batch = ips_list[i:i + batch_size]
                     placeholders = ",".join(["?" for _ in batch])
@@ -111,6 +113,7 @@ class HttpPersistence:
 
         try:
             with sqlite3.connect(self.db_path) as conn:
+                configure_primary_connection(conn)
                 for i in range(0, len(ids_list), batch_size):
                     batch = ids_list[i:i + batch_size]
                     placeholders = ",".join(["?" for _ in batch])
@@ -256,6 +259,7 @@ class HttpPersistence:
             The authoritative server_id for this endpoint (ip+port).
         """
         with sqlite3.connect(self.db_path) as conn:
+            configure_primary_connection(conn)
             conn.execute(
                 self._UPSERT_SQL,
                 (ip, country, country_code, port, scheme, banner, title, shodan_data),
@@ -282,6 +286,7 @@ class HttpPersistence:
     ) -> None:
         """Insert a single http_access row."""
         with sqlite3.connect(self.db_path) as conn:
+            configure_primary_connection(conn)
             conn.execute(
                 self._ACCESS_SQL,
                 (
@@ -312,6 +317,7 @@ class HttpPersistence:
         if not outcomes:
             return
         with sqlite3.connect(self.db_path) as conn:
+            configure_primary_connection(conn)
             for o in outcomes:
                 conn.execute(
                     self._UPSERT_SQL,
@@ -380,6 +386,7 @@ class HttpPersistence:
         """
 
         with sqlite3.connect(self.db_path) as conn:
+            configure_primary_connection(conn)
             for o in outcomes:
                 conn.execute(
                     self._UPSERT_SQL,

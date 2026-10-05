@@ -9,6 +9,8 @@ import time
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
+from shared.db_connection import configure_primary_connection
+
 _logger = logging.getLogger(__name__)
 
 def export_database(
@@ -42,6 +44,7 @@ def export_database(
             progress_callback(10, "Creating optimized copy...")
 
         conn = sqlite3.connect(self.current_db_path)
+        configure_primary_connection(conn)
         conn.execute(f"VACUUM INTO ?", (output_path,))
         conn.close()
 
@@ -242,6 +245,7 @@ def vacuum_database(
             progress_callback(20, "Optimizing database...")
 
         conn = sqlite3.connect(self.current_db_path)
+        configure_primary_connection(conn)
         conn.execute("VACUUM")
         conn.close()
 
@@ -501,6 +505,7 @@ def execute_purge(
             progress_callback(10, f"Deleting {preview.servers_to_delete} servers...")
 
         conn = sqlite3.connect(self.current_db_path)
+        configure_primary_connection(conn)
         conn.execute("PRAGMA foreign_keys = ON")
         cursor = conn.cursor()
 

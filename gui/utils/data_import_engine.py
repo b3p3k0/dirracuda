@@ -23,6 +23,7 @@ import os
 import hashlib
 
 from shared.config import normalize_db_timestamp
+from shared.db_connection import configure_primary_connection
 
 _TS_FIELDS = frozenset({
     "first_seen", "last_seen", "created_at", "updated_at",
@@ -506,6 +507,7 @@ class DataImportEngine:
         schema = self.db_schemas[data_type]
         
         with sqlite3.connect(self.db_path, timeout=30) as conn:
+            configure_primary_connection(conn)
             cursor = conn.cursor()
             cursor.execute(schema['sql_create'])
             
@@ -563,6 +565,7 @@ class DataImportEngine:
         }
         
         with sqlite3.connect(self.db_path, timeout=30) as conn:
+            configure_primary_connection(conn)
             cursor = conn.cursor()
             
             # Handle replace mode

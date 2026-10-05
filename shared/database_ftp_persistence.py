@@ -7,6 +7,8 @@ import sqlite3
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Set, Tuple
 
+from shared.db_connection import configure_primary_connection
+
 class FtpPersistence:
     """
     Write operations for the FTP sidecar tables (ftp_servers, ftp_access).
@@ -75,6 +77,7 @@ class FtpPersistence:
 
         try:
             with sqlite3.connect(self.db_path) as conn:
+                configure_primary_connection(conn)
                 for i in range(0, len(ips_list), batch_size):
                     batch = ips_list[i:i + batch_size]
                     placeholders = ",".join(["?" for _ in batch])
@@ -105,6 +108,7 @@ class FtpPersistence:
 
         try:
             with sqlite3.connect(self.db_path) as conn:
+                configure_primary_connection(conn)
                 for i in range(0, len(ids_list), batch_size):
                     batch = ids_list[i:i + batch_size]
                     placeholders = ",".join(["?" for _ in batch])
@@ -250,6 +254,7 @@ class FtpPersistence:
         lastrowid is not reliable on the conflict-update code path.
         """
         with sqlite3.connect(self.db_path) as conn:
+            configure_primary_connection(conn)
             conn.execute(self._UPSERT_SQL, (ip, country, country_code, port,
                                             anon_accessible, banner, shodan_data))
             conn.commit()
@@ -276,6 +281,7 @@ class FtpPersistence:
         that need idempotency should check for an existing row first.
         """
         with sqlite3.connect(self.db_path) as conn:
+            configure_primary_connection(conn)
             conn.execute(self._ACCESS_SQL, (server_id, session_id, accessible,
                                             auth_status, root_listing_available,
                                             root_entry_count, error_message,
@@ -293,6 +299,7 @@ class FtpPersistence:
         if not outcomes:
             return
         with sqlite3.connect(self.db_path) as conn:
+            configure_primary_connection(conn)
             for o in outcomes:
                 conn.execute(self._UPSERT_SQL, (
                     o.ip, o.country, o.country_code, o.port,
@@ -320,6 +327,7 @@ class FtpPersistence:
         if not outcomes:
             return
         with sqlite3.connect(self.db_path) as conn:
+            configure_primary_connection(conn)
             for o in outcomes:
                 conn.execute(self._UPSERT_SQL, (
                     o.ip, o.country, o.country_code, o.port,

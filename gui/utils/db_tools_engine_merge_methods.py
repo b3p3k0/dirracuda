@@ -10,6 +10,8 @@ import time
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
+from shared.db_connection import configure_primary_connection
+
 _logger = logging.getLogger(__name__)
 
 def merge_database(
@@ -71,6 +73,7 @@ def merge_database(
         ext_conn.row_factory = sqlite3.Row
 
         cur_conn = sqlite3.connect(self.current_db_path)
+        configure_primary_connection(cur_conn)
         cur_conn.row_factory = sqlite3.Row
         cur_conn.execute("PRAGMA foreign_keys = ON")
 

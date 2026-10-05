@@ -7,6 +7,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+from shared.db_connection import configure_primary_connection
+
 from experimental.webui.db_common import (
     _connect,
     _format_last_seen,
@@ -828,6 +830,7 @@ def export_db(db_path: Path, export_dir: Path) -> Path:
     # mode=rw: refuses to create a new file; raises OperationalError if db_path absent
     conn = sqlite3.connect(f"file:{db_path}?mode=rw", uri=True)
     try:
+        configure_primary_connection(conn)
         conn.execute("VACUUM INTO ?", (str(dest_path),))
     finally:
         conn.close()

@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from shared.config import normalize_db_timestamp
+from shared.db_connection import configure_primary_connection
 
 _logger = logging.getLogger(__name__)
 
@@ -370,6 +371,7 @@ def import_csv_hosts(
             return result
 
         conn = sqlite3.connect(self.current_db_path)
+        configure_primary_connection(conn)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys = ON")
 

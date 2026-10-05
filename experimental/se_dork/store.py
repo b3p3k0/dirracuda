@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Optional
 
 from experimental.se_dork.models import RunOptions, RUN_STATUS_RUNNING
+from shared.db_connection import configure_primary_connection
 from shared.path_service import get_paths, get_legacy_paths, select_existing_path
 
 
@@ -124,7 +125,7 @@ def init_db(path: Optional[Path] = None) -> None:
     resolved = get_db_path(path)
     resolved.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(str(resolved)) as conn:
-        conn.execute("PRAGMA journal_mode=WAL")
+        configure_primary_connection(conn)
         conn.execute("PRAGMA foreign_keys=ON")
         conn.execute(_DDL_RUNS)
         conn.execute(_DDL_RESULTS)
@@ -215,7 +216,7 @@ def open_connection(path: Optional[Path] = None) -> sqlite3.Connection:
     """
     resolved = get_db_path(path)
     conn = sqlite3.connect(str(resolved))
-    conn.execute("PRAGMA journal_mode=WAL")
+    configure_primary_connection(conn)
     conn.execute("PRAGMA foreign_keys=ON")
     _check_schema(conn)
     return conn

@@ -1,5 +1,6 @@
-"""CPM-B1: primary DB pragmas, thread lifetime, and GUI/CLI concurrency."""
+"""CPM-B1/B2: primary DB pragmas, thread lifetime, and GUI/CLI concurrency."""
 
+import ast
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager, closing
 import gc
@@ -553,3 +554,226 @@ def test_helper_warns_without_stdout_and_preserves_other_pragmas(tmp_path, caplo
     assert caplog.records[0].name == "shared.db_connection"
     assert "memory" in caplog.text
     assert capsys.readouterr().out == ""
+
+
+def test_rw_openers_use_helper():
+    # CPM-B2 §5 plus the RA/PA-approved primary-DB functions. None guards
+    # the whole file; explicit function sets keep B1 and legacy wipe out of scope.
+    files = {
+        "shared/database_ftp_persistence.py": None,
+        "shared/database_http_persistence.py": None,
+        "gui/utils/data_import_engine.py": None,
+        "gui/utils/db_tools_engine_core_methods.py": None,
+        "gui/utils/db_tools_engine_maintenance_methods.py": None,
+        "gui/utils/db_tools_engine_merge_methods.py": None,
+        "experimental/webui/db_actions.py": None,
+        "experimental/webui/results_probe_actions.py": None,
+        "experimental/webui/db.py": None,
+        # Exempt analyze_database_schema: read-only validation of potentially
+        # non-active candidate files must not convert their journal mode to WAL.
+        "gui/utils/database_access_core_methods.py": {"_ensure_http_columns"},
+        "experimental/redseek/store.py": {"init_db", "open_connection", "wipe_ingest_state"},
+        "experimental/se_dork/store.py": {"init_db", "open_connection"},
+    }
+    checked = 0
+    backup_outputs = 0
+    for filename, functions in files.items():
+        source = (REPO_ROOT / filename).read_text()
+        tree = ast.parse(source)
+        parents = {child: parent for parent in ast.walk(tree) for child in ast.iter_child_nodes(parent)}
+        for call in ast.walk(tree):
+            if not (
+                isinstance(call, ast.Call)
+                and isinstance(call.func, ast.Attribute)
+                and isinstance(call.func.value, ast.Name)
+                and call.func.value.id == "sqlite3"
+                and call.func.attr == "connect"
+            ):
+                continue
+            if "mode=ro" in ast.get_source_segment(source, call):
+                continue
+            function = parents[call]
+            while not isinstance(function, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                function = parents[function]
+            if functions is not None and function.name not in functions:
+                continue
+            # The online-backup destination is a separate output, not a primary
+            # DB opener in §5. Keep this exemption specific to this one call.
+            if (
+                filename == "gui/utils/db_tools_engine_core_methods.py"
+                and function.name == "create_backup"
+                and len(call.args) == 1
+                and isinstance(call.args[0], ast.Name)
+                and call.args[0].id == "backup_path"
+            ):
+                backup_outputs += 1
+                continue
+            location = f"{filename}:{call.lineno} ({function.name})"
+            parent = parents[call]
+            if isinstance(parent, ast.withitem):
+                statement = parents[parent]
+                assert isinstance(statement, ast.With), location
+                connection = parent.optional_vars
+                following = statement.body[0]
+            else:
+                assert isinstance(parent, ast.Assign) and len(parent.targets) == 1, location
+                connection = parent.targets[0]
+                block = parents[parent]
+                siblings = next(
+                    value for _, value in ast.iter_fields(block)
+                    if isinstance(value, list) and parent in value
+                )
+                index = siblings.index(parent)
+                assert index + 1 < len(siblings), location
+                following = siblings[index + 1]
+            # Permit immediate setup inside a try/finally cleanup block.
+            if isinstance(following, ast.Try):
+                assert following.finalbody, location
+                following = following.body[0]
+            assert isinstance(connection, ast.Name), location
+            expected = ast.parse(f"configure_primary_connection({connection.id})").body[0]
+            assert ast.dump(following) == ast.dump(expected), (
+                f"{location}: missing immediate configure_primary_connection({connection.id})"
+            )
+            checked += 1
+    assert checked == 28
+    assert backup_outputs == 1
+
+
+def test_webui_export_closes_connection_when_configuration_fails(tmp_path, monkeypatch):
+    from experimental.webui import db
+
+    path = tmp_path / "primary.db"
+    conn = sqlite3.connect(path)
+    original = sqlite3.OperationalError("configuration failed")
+
+    def fail_configuration(opened):
+        assert opened is conn
+        raise original
+
+    monkeypatch.setattr(db.sqlite3, "connect", lambda *args, **kwargs: conn)
+    monkeypatch.setattr(db, "configure_primary_connection", fail_configuration)
+    try:
+        with pytest.raises(sqlite3.OperationalError) as caught:
+            db.export_db(path, tmp_path / "exports")
+        assert caught.value is original
+        with pytest.raises(sqlite3.ProgrammingError, match="closed database"):
+            conn.execute("SELECT 1")
+    finally:
+        conn.close()
+
+
+def test_t8d_http_persistence_and_gui_concurrent_writes(tmp_path, make_reader):
+    # DatabaseReader initializes the real schema via run_migrations.
+    reader = make_reader()
+    ready = tmp_path / "http-ready"
+    go = tmp_path / "http-go"
+    code = textwrap.dedent(f"""
+        from pathlib import Path
+        import time
+        from shared import db_migrations
+        from shared.database_http_persistence import HttpPersistence
+
+        # Isolate migration settings import from the developer's saved data.
+        db_migrations._import_legacy_settings = lambda cur: None
+        persistence = HttpPersistence({str(reader.db_path)!r})
+        Path({str(ready)!r}).touch()
+        deadline = time.monotonic() + 10
+        while not Path({str(go)!r}).exists():
+            assert time.monotonic() < deadline, 'parent start timed out'
+            time.sleep(0.001)
+        for value in range(1, 201):
+            server_id = persistence.upsert_http_server(
+                ip=f'192.0.2.{{value}}', country='Test', country_code='ZZ',
+                port=80, scheme='http', banner='', title='', shodan_data='{{}}',
+            )
+            persistence.record_http_access(
+                server_id=server_id, session_id=None, accessible=True,
+                status_code=200, is_index_page=True, dir_count=1, file_count=2,
+                tls_verified=False, error_message=None, access_details='{{}}',
+            )
+            time.sleep(0.001)
+    """)
+    barrier = threading.Barrier(5, timeout=10)
+
+    def read():
+        try:
+            barrier.wait(timeout=10)
+            counts = []
+            for _ in range(200):
+                with reader._get_connection() as conn:
+                    counts.append(conn.execute("SELECT count(*) FROM http_servers").fetchone()[0])
+                time.sleep(0.001)
+            assert counts == sorted(counts)
+        finally:
+            reader.close_thread_connection()
+
+    def write(offset):
+        try:
+            barrier.wait(timeout=10)
+            for value in range(offset, offset + 100):
+                with reader._get_connection() as conn:
+                    conn.execute(
+                        "INSERT INTO http_servers (ip_address, port) VALUES (?, ?)",
+                        (f"198.51.100.{value}", 80),
+                    )
+                    conn.commit()
+                time.sleep(0.001)
+        finally:
+            reader.close_thread_connection()
+
+    with ThreadPoolExecutor(max_workers=5) as pool:
+        process = pool.submit(
+            subprocess.run, [sys.executable, "-c", code],
+            timeout=60, capture_output=True, **_subprocess_kwargs(),
+        )
+        deadline = time.monotonic() + 10
+        while not ready.exists():
+            if process.done():
+                result = process.result(timeout=1)
+                pytest.fail(f"HTTP subprocess exited before ready: {result.stdout}\n{result.stderr}")
+            assert time.monotonic() < deadline, "HTTP subprocess start timed out"
+            time.sleep(0.001)
+        futures = [pool.submit(read), pool.submit(read), pool.submit(write, 1), pool.submit(write, 101)]
+        go.touch()
+        barrier.wait(timeout=10)
+        # Each result propagates parent reader/writer errors to the test.
+        for future in futures:
+            future.result(timeout=60)
+        result = process.result(timeout=65)
+    assert result.returncode == 0, (result.stdout, result.stderr)
+    assert "database is locked" not in result.stderr.lower()
+    with reader._get_connection() as conn:
+        assert conn.execute("SELECT count(*) FROM http_servers").fetchone()[0] == 400
+        assert conn.execute(
+            "SELECT count(*) FROM http_servers WHERE ip_address LIKE '192.0.2.%'"
+        ).fetchone()[0] == 200
+        assert conn.execute(
+            "SELECT count(*) FROM http_servers WHERE ip_address LIKE '198.51.100.%'"
+        ).fetchone()[0] == 200
+        assert conn.execute("SELECT count(*) FROM http_access").fetchone()[0] == 200
+        assert conn.execute(
+            "SELECT count(DISTINCT server_id) FROM http_access WHERE accessible=1 AND status_code=200"
+        ).fetchone()[0] == 200
+
+
+def test_t12_read_only_connection_during_immediate_write(reader):
+    def read_only():
+        start = time.monotonic()
+        uri = Path(reader.db_path).resolve().as_uri() + "?mode=ro"
+        with closing(sqlite3.connect(uri, uri=True, timeout=0.5)) as conn:
+            count = conn.execute("SELECT count(*) FROM cpm_rows").fetchone()[0]
+        return count, time.monotonic() - start
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        with reader._get_connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute("INSERT INTO cpm_rows VALUES (1)")
+            count, elapsed = pool.submit(read_only).result(timeout=1)
+            assert count == 0
+            assert elapsed < 1
+            assert conn.in_transaction
+            conn.commit()
+        count, elapsed = pool.submit(read_only).result(timeout=1)
+        assert count == 1
+        assert elapsed < 1

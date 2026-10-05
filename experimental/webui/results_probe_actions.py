@@ -10,6 +10,8 @@ import time
 from pathlib import Path
 from typing import Any, Optional
 
+from shared.db_connection import configure_primary_connection
+
 from gui.utils import probe_patterns
 from gui.utils.database_access import DatabaseReader
 from gui.utils.probe_cache_dispatch import dispatch_probe_run
@@ -64,6 +66,7 @@ def _connect_ro(db_path: Path) -> sqlite3.Connection:
 
 def _connect_rw(db_path: Path) -> sqlite3.Connection:
     conn = sqlite3.connect(f"file:{db_path}?mode=rw", uri=True)
+    configure_primary_connection(conn)
     conn.row_factory = sqlite3.Row
     return conn
 

@@ -6,6 +6,8 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
+from shared.db_connection import configure_primary_connection
+
 _VALID_ACTIONS = frozenset({"favorite", "avoid", "compromised"})
 
 _HOST_TABLES = {
@@ -29,6 +31,7 @@ _HOST_TABLES = {
 
 def _connect_rw(db_path: Path) -> sqlite3.Connection:
     conn = sqlite3.connect(f"file:{db_path}?mode=rw", uri=True)
+    configure_primary_connection(conn)
     conn.row_factory = sqlite3.Row
     return conn
 
