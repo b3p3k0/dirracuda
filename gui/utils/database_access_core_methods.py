@@ -17,6 +17,8 @@ try:
 except ImportError:
     from .error_codes import get_error, format_error_message
 
+from gui.utils import last_scan_window
+
 def _ensure_http_columns(self) -> None:
     """
     Best-effort migration to add legacy optional HTTP columns if missing.
@@ -365,8 +367,14 @@ def _query_dashboard_summary(self) -> Dict[str, Any]:
         """
         recent_result = conn.execute(recent_discoveries_query).fetchone()
         
-        # Get last scan time across SMB, FTP, and HTTP hosts
+        # Get last scan time: newest host last_seen, or the last desktop scan
+        # window end when later (a run that found no hosts still ran). Both UTC.
         last_scan = self._get_protocol_recent_cutoff(conn)
+        window = last_scan_window.load_last_scan_window(self.db_path)
+        if window:
+            window_end = window["end"].strftime("%Y-%m-%d %H:%M:%S")
+            if not last_scan or window_end > last_scan:
+                last_scan = window_end
         
         # Get database size (approximate)
         size_query = "SELECT page_count * page_size as size FROM pragma_page_count(), pragma_page_size()"

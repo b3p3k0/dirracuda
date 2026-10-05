@@ -195,6 +195,7 @@ def dash(tmp_path, monkeypatch):
         _register_running_task=lambda **_kwargs: "provider-task",
         _remove_running_task=MagicMock(),
         _log_status_event=MagicMock(),
+        refresh_after_database_change=MagicMock(),
     )
 
 
@@ -234,6 +235,7 @@ def test_queue_records_window(dash, recorder, cancelled):
     assert dash._provider_queue_started_at is None
     assert dash._provider_queue_active is False
     dash._remove_running_task.assert_called_once_with("provider-task")
+    dash.refresh_after_database_change.assert_called_with(refresh_runtime_status=True)
     provider_queue._finish_provider_queue(dash)
     assert not provider_queue.cancel_provider_queue(dash)
     recorder.assert_called_once()
@@ -293,3 +295,11 @@ def test_missing_start_or_db_skips_record(dash, recorder, missing):
     recorder.assert_not_called()
     assert dash._provider_queue_active is False
     assert dash._provider_queue_started_at is None
+
+
+def test_failed_record_skips_dashboard_refresh(dash, recorder):
+    recorder.return_value = False
+    assert provider_queue.start_provider_queue(dash, {"providers": ["reddit"]})
+    assert provider_queue.cancel_provider_queue(dash)
+    recorder.assert_called_once()
+    dash.refresh_after_database_change.assert_not_called()

@@ -322,13 +322,14 @@ def _record_scan_window(dash, *, cancelled: bool) -> None:
         db_path = getattr(getattr(dash, "db_reader", None), "db_path", None)
         if start is None or not db_path:
             return
-        last_scan_window.record_last_scan_window(
+        if last_scan_window.record_last_scan_window(
             start,
             datetime.now(timezone.utc),
             db_path,
             providers=list(getattr(dash, "_provider_queue_providers", []) or []),
             cancelled=cancelled,
-        )
+        ):
+            _hook(dash, "refresh_after_database_change", refresh_runtime_status=True)
     except Exception:
         pass
     finally:
