@@ -44,7 +44,10 @@ def run_migrations(db_path: str) -> None:
 
     conn: Optional[sqlite3.Connection] = None
     try:
+        from shared.db_connection import configure_primary_connection
+
         conn = sqlite3.connect(str(path_obj))
+        configure_primary_connection(conn)
         cur = conn.cursor()
         _ensure_core_smb_tables(cur)
         _backfill_smb_servers_from_legacy_servers(cur)

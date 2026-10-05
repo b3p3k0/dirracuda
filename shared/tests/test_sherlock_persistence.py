@@ -294,8 +294,6 @@ def test_stale_when_cache_missing_latest_snapshot_column(tmp_path):
     reader.db_path = db
     reader.cache = {}
     reader.cache_timestamps = {}
-    import threading
-    reader.connection_lock = threading.Lock()
 
     result = reader.get_sherlock_result_for_host("10.0.0.9", "S", protocol_server_id=1)
     assert result is not None
@@ -320,8 +318,6 @@ def test_missing_sherlock_tables_returns_none(tmp_path):
     reader.db_path = db
     reader.cache = {}
     reader.cache_timestamps = {}
-    import threading
-    reader.connection_lock = threading.Lock()
 
     assert reader.get_sherlock_result_for_host("1.2.3.4", "S", protocol_server_id=1) is None
     assert reader.store_sherlock_result("1.2.3.4", "S", 5, _make_match_result(1),
@@ -411,8 +407,6 @@ def test_guard_rejects_partial_table_missing_omitted_column(tmp_path):
     reader.db_path = db
     reader.cache = {}
     reader.cache_timestamps = {}
-    import threading
-    reader.connection_lock = threading.Lock()
 
     assert reader.store_sherlock_result("10.0.0.30", "S", 5, _make_match_result(1),
                                         protocol_server_id=1) is None
@@ -698,8 +692,6 @@ def test_c9_partial_schema_without_tag_columns_degrades(tmp_path):
     reader.db_path = db
     reader.cache = {}
     reader.cache_timestamps = {}
-    import threading
-    reader.connection_lock = threading.Lock()
 
     rid = reader.store_sherlock_result(
         "10.0.0.24", "S", 5, _tagged_match_result([(Severity.HIGH, "user2")]),

@@ -58,7 +58,7 @@ class DatabaseReader:
         self.cache_duration = cache_duration
         self.cache = {}
         self.cache_timestamps = {}
-        self.connection_lock = threading.Lock()
+        self._local = threading.local()
 
         try:
             from shared.db_migrations import run_migrations
@@ -80,7 +80,10 @@ class DatabaseReader:
         # self._validate_database()
 
 
-from gui.utils.database_access_core_methods import bind_database_access_core_methods
+from gui.utils.database_access_core_methods import (
+    bind_database_access_core_methods,
+    close_thread_connection,
+)
 from gui.utils.database_access_write_methods import bind_database_access_write_methods
 from gui.utils.database_access_protocol_methods import bind_database_access_protocol_methods
 from gui.utils.database_access_sherlock_methods import bind_database_access_sherlock_methods
@@ -91,6 +94,7 @@ _SHARED_BIND_SYMBOLS: Dict[str, Any] = {
 }
 
 bind_database_access_core_methods(DatabaseReader, _SHARED_BIND_SYMBOLS)
+DatabaseReader.close_thread_connection = close_thread_connection
 bind_database_access_write_methods(DatabaseReader, _SHARED_BIND_SYMBOLS)
 bind_database_access_protocol_methods(DatabaseReader, _SHARED_BIND_SYMBOLS)
 bind_database_access_sherlock_methods(DatabaseReader, _SHARED_BIND_SYMBOLS)

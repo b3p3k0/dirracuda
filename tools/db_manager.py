@@ -91,6 +91,8 @@ class DatabaseManager:
         Returns:
             SQLite connection object
         """
+        from shared.db_connection import configure_primary_connection
+
         if not hasattr(self._local, 'connection') or self._local.connection is None:
             self._local.connection = sqlite3.connect(
                 self.db_path,
@@ -100,7 +102,7 @@ class DatabaseManager:
             self._local.connection.row_factory = sqlite3.Row
             # Enable foreign key constraints
             self._local.connection.execute("PRAGMA foreign_keys = ON")
-            self._local.connection.execute("PRAGMA journal_mode = WAL")
+            configure_primary_connection(self._local.connection)
         
         return self._local.connection
     

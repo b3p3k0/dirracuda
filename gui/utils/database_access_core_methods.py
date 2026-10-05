@@ -18,6 +18,7 @@ except ImportError:
     from .error_codes import get_error, format_error_message
 
 from gui.utils import last_scan_window
+from shared.db_connection import ThreadConnectionCleanup, configure_primary_connection
 
 def _ensure_http_columns(self) -> None:
     """
@@ -241,47 +242,62 @@ def disable_mock_mode(self) -> None:
 
 @contextmanager
 def _get_connection(self, timeout: int = 30):
-    """
-    Get database connection with timeout and retry logic.
-    
-    Args:
-        timeout: Connection timeout in seconds
-        
-    Yields:
-        SQLite connection object
-        
-    Design Decision: Timeout and retry logic handles database locks
-    when backend is writing during active scans.
-    """
-    with self.connection_lock:
+    """Reuse this thread's connection and discard uncommitted outermost work."""
+    local = getattr(self, "_local", None)
+    if local is None:
+        # Keep concurrent first checkouts on one shared thread-local container.
+        local = self.__dict__.setdefault("_local", threading.local())
+
+    conn = getattr(local, "connection", None)
+    if conn is not None and local.db_path != self.db_path:
+        self.close_thread_connection()
         conn = None
+    if conn is None:
+        db_path = self.db_path
+        conn = sqlite3.connect(db_path, timeout=timeout, check_same_thread=False)
+        conn.row_factory = sqlite3.Row
         try:
-            conn = sqlite3.connect(
-                self.db_path,
-                timeout=timeout,
-                check_same_thread=False
-            )
-            conn.row_factory = sqlite3.Row  # Dict-like access
-            yield conn
-        except sqlite3.OperationalError as e:
-            if "locked" in str(e).lower():
-                # Database is locked, likely backend is writing
-                time.sleep(1)
-                # Try once more with shorter timeout
-                try:
-                    conn = sqlite3.connect(self.db_path, timeout=5)
-                    conn.row_factory = sqlite3.Row
-                    yield conn
-                except sqlite3.OperationalError:
-                    raise sqlite3.OperationalError(
-                        "Database is locked by backend operation. "
-                        "Try again in a moment."
-                    )
-            else:
-                raise
-        finally:
-            if conn:
-                conn.close()
+            configure_primary_connection(conn)
+        except BaseException:
+            conn.close()
+            raise
+        local.connection = conn
+        local.cleanup = ThreadConnectionCleanup(conn)
+        local.db_path = db_path
+        local.depth = 0
+
+    depth = local.depth
+    if depth == 0:
+        conn.execute(f"PRAGMA busy_timeout={int(timeout * 1000)}")
+    local.depth = depth + 1
+    try:
+        yield conn
+    except BaseException:
+        if depth == 0:
+            try:
+                if conn.in_transaction:
+                    conn.rollback()
+            except Exception:
+                pass  # Cleanup must not mask the original body exception.
+        raise
+    else:
+        if depth == 0 and conn.in_transaction:
+            conn.rollback()
+    finally:
+        local.depth = depth
+
+
+def close_thread_connection(self) -> None:
+    """Close and clear only the calling thread's cached connection."""
+    local = getattr(self, "_local", None)
+    if local is None:
+        return
+    conn = getattr(local, "connection", None)
+    try:
+        if conn is not None:
+            local.cleanup.close()
+    finally:
+        local.__dict__.clear()
 
 def get_dashboard_summary(self) -> Dict[str, Any]:
     """
