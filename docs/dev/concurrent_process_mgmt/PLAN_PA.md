@@ -1,7 +1,9 @@
 # Concurrent Process Management — PA Plan
 
-**Status:** Plan. Awaiting HI approval. No card is authorized until HI approves
-this file. An approval authorizes **only the card it names**.
+**Status:** Approved by HI 2026-10-05. §8 decisions P1–P6 accepted. HI
+authorized running all four cards through to final HI test, skipping
+intermediate HI tests (SOP exception, HI-granted). DA = `codex` CLI; RA =
+Claude (different vendor, satisfies RA ≠ DA on B1/B2). HI owns push.
 **Role at authoring:** PA. **Track:** full process.
 **Date:** 2026-10-05. **Branch:** `development`.
 **Input:** `FINDINGS_AA.md` (commits c0ea63c, 609930d). Decisions D1, D2, D3
@@ -361,7 +363,7 @@ No change to timeouts, port-check timeouts, or Shodan pacing.
 
 ---
 
-## 8. Decisions PA made (bounded judgment)
+## 8. Decisions PA made (bounded judgment) — accepted by HI 2026-10-05
 
 | # | Decision | Reason | HI can flip by |
 |---|---|---|---|
@@ -401,8 +403,7 @@ No change to timeouts, port-check timeouts, or Shodan pacing.
 
 ## 10. Status
 
-Status: plan written; awaiting HI approval.
-Next: HI approves CPM-B1 (or the plan with changes); DA starts B1.
+Status: approved; cards running B1 → B2 → A → C.
+Next: final HI test after Card C (see §9 manual check).
 Risk: B1 changes connection lifecycle for every GUI DB call.
-Open: P2–P4 stand unless HI says otherwise. HI may optionally set the live
-config delays to 0 / 0 / 0.5 after Card C.
+Open: HI may optionally set the live config delays to 0 / 0 / 0.5 after Card C.
