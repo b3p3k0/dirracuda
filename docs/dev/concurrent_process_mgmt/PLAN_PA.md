@@ -408,7 +408,15 @@ No change to timeouts, port-check timeouts, or Shodan pacing.
 
 ## 10. Status
 
-Status: approved; cards running B1 → B2 → A → C.
-Next: final HI test after Card C (see §9 manual check).
-Risk: B1 changes connection lifecycle for every GUI DB call.
-Open: HI may optionally set the live config delays to 0 / 0 / 0.5 after Card C.
+| Card | Commit | Result |
+|---|---|---|
+| B1 | e5cfd1c | Accepted. shared+webui 4034 pass; gui 2502 pass. |
+| B2 | bc1e560 | Accepted. 7 extra openers found by DA grep added at RA direction (DatabaseReader `_ensure_http_columns`, Redseek store ×3, SE-dork store ×2); `analyze_database_schema` exempt as a read-only validation probe. |
+| A | 8a9806a | Accepted. Also covered Web UI selectors/JS and a second Redseek clamp. |
+| C | 665e37a | Accepted. shared+webui 4109 pass; gui 2520 pass. |
+
+Status: all four cards accepted; ready for final HI test (§9 manual check).
+Next: HI runs the manual check; HI pushes.
+Risk: higher default concurrency is not yet benchmarked on live hosts.
+Open: the live `~/.dirracuda/conf/config.json` still holds delays 1 / 2 / 2,
+which override the new defaults. HI edits it if wanted.

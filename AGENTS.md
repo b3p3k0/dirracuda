@@ -92,6 +92,13 @@ startup via `shared/db_migrations.py`. Core tables: `smb_servers`, `ftp_servers`
 `http_servers`, `share_access`, `file_manifests`, `scan_sessions`, `failure_logs`,
 `host_probe_cache`, `host_user_flags`, `sherlock_results`, `sherlock_hits`.
 
+Every read-write opener of the primary DB calls
+`shared/db_connection.py::configure_primary_connection` (WAL + 30 s
+`busy_timeout`); a guardrail in `shared/tests/test_db_wal_concurrency.py` enforces
+it. `DatabaseReader` keeps one connection per thread with no global lock and
+rolls back uncommitted work on exit. Probe worker counts come from
+`shared/probe_concurrency.py` (default 12, cap 16).
+
 ### User-Data Paths
 
 Always call `shared/path_service.py::get_paths()` — returns a `DirracudaPaths`
