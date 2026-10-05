@@ -54,8 +54,8 @@ DEFAULT_GUI_SETTINGS = {
         'api_key_override': '',
         'discovery_max_concurrency': 1,
         'access_max_concurrency': 1,
-        'rate_limit_delay': 1,
-        'share_access_delay': 1,
+        'rate_limit_delay': 0,
+        'share_access_delay': 0,
         'remember_api_key': False,
         'verbose': False
     },

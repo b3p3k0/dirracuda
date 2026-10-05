@@ -283,8 +283,8 @@ class SMBSeekConfig:
             "connection": {
                 "timeout": 30,
                 "port_check_timeout": 10,
-                "rate_limit_delay": 3,
-                "share_access_delay": 7
+                "rate_limit_delay": 0,
+                "share_access_delay": 0
             },
             "discovery": {
                 "max_concurrent_hosts": 10,
@@ -297,7 +297,7 @@ class SMBSeekConfig:
             "file_collection": {
                 "max_files_per_target": 3,
                 "max_total_size_mb": 500,
-                "download_delay_seconds": 2,
+                "download_delay_seconds": 0.5,
                 "max_directory_depth": 3,
                 "enumeration_timeout_seconds": 120,
                 "included_extensions": [
@@ -667,11 +667,11 @@ class SMBSeekConfig:
     
     def get_rate_limit_delay(self) -> int:
         """Get delay between connection attempts."""
-        return self.get("connection", "rate_limit_delay", 3)
+        return self.get("connection", "rate_limit_delay", 0)
     
     def get_share_access_delay(self) -> int:
         """Get delay between share access tests on same host."""
-        return self.get("connection", "share_access_delay", 7)
+        return self.get("connection", "share_access_delay", 0)
 
     def get_max_concurrent_hosts(self) -> int:
         """Get maximum concurrent hosts for access operations with validation."""

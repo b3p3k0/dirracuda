@@ -246,7 +246,8 @@ class AccessOperation:
 
                 if share_name != shares[-1]:
                     delay = self.config.get_share_access_delay()
-                    time.sleep(delay)
+                    if delay > 0:
+                        time.sleep(delay)
 
             accessible_count = len(target_result['accessible_shares'])
             total_count = len(shares)

@@ -43,6 +43,9 @@ def throttled_auth_wait(op) -> None:
     """
     Enhanced thread-safe rate limiting for discovery authentication attempts.
     """
+    if op.config.get_rate_limit_delay() <= 0:
+        return
+
     if not op.config.get_discovery_smart_throttling():
         basic_throttled_auth_wait(op)
         return
@@ -76,6 +79,9 @@ def basic_throttled_auth_wait(op) -> None:
     """
     Basic thread-safe rate limiting (fallback when smart throttling disabled).
     """
+    if op.config.get_rate_limit_delay() <= 0:
+        return
+
     with op._auth_rate_lock:
         current_time = time.monotonic()
 
@@ -253,7 +259,9 @@ def test_smb_authentication_sequential(op, ip_list: List[str], country=None) -> 
             op.output.print_if_verbose(f"  ✓ {ip}: {result['auth_method']}")
 
         if i < total_hosts:
-            time.sleep(op.config.get_rate_limit_delay())
+            delay = op.config.get_rate_limit_delay()
+            if delay > 0:
+                time.sleep(delay)
 
     op.stats['successful_auth'] = len(successful_hosts)
     op.stats['failed_auth'] = total_hosts - len(successful_hosts)

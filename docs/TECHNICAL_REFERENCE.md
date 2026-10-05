@@ -382,6 +382,18 @@ Dedicated standalone files remain unchanged:
 
 Typed accessors (`get_shodan_api_key()`, `get_ftp_config()`, `get_http_config()`, etc.) remain stable for callers.
 
+Pacing defaults (seconds):
+
+| Key | Default | Behavior |
+|-----|---------|----------|
+| `connection.rate_limit_delay` | `0` | No CLI SMB auth wait at zero; positive values retain basic pacing or smart throttling with a 0.5-second floor before jitter. |
+| `connection.share_access_delay` | `0` | No CLI SMB inter-share wait at zero; positive values pause between shares. |
+| `file_collection.download_delay_seconds` | `0.5` | Pause between extract downloads to the same host. |
+
+Existing saved values override these defaults and are not migrated. The scan
+dialog accepts and saves zero for both connection delays. These settings do not
+change Dashboard batch probe pacing, timeouts, or Shodan request pacing.
+
 ### 3.3 GUI/User Preferences
 
 Batch probe concurrency uses `shared/probe_concurrency.py`: default **12** workers,
@@ -458,7 +470,7 @@ flowchart TD
 - ≤10 hosts: `min(3, max_concurrent, total_hosts)`
 - >10 hosts: `min(max_concurrent, total_hosts, max_worker_cap)`
 
-With `smart_throttling=true`, `throttled_auth_wait()` adjusts the rate-limit delay dynamically based on active thread count and adds ±20% jitter. With it disabled, `basic_throttled_auth_wait()` applies a flat `rate_limit_delay` between attempts.
+With a positive `rate_limit_delay` and `smart_throttling=true`, `throttled_auth_wait()` adjusts the delay dynamically based on active thread count, applies a 0.5-second floor, and adds jitter. With smart throttling disabled, `basic_throttled_auth_wait()` applies a flat `rate_limit_delay` between attempts. Both skip waiting when the configured delay is zero or negative.
 
 Progress is reported on the first host, every 10 hosts, and the final host.
 

@@ -647,8 +647,8 @@ class ScanDialog:
 
         discovery_value = _coerce_int(discovery_defaults.get('max_concurrent_hosts'), 1, minimum=1)
         access_value = _coerce_int(access_defaults.get('max_concurrent_hosts'), 1, minimum=1)
-        rate_limit_value = _coerce_int(connection_defaults.get('rate_limit_delay'), 1, minimum=0)
-        share_delay_value = _coerce_int(connection_defaults.get('share_access_delay'), 1, minimum=0)
+        rate_limit_value = _coerce_int(connection_defaults.get('rate_limit_delay'), 0, minimum=0)
+        share_delay_value = _coerce_int(connection_defaults.get('share_access_delay'), 0, minimum=0)
 
         self.discovery_concurrency_var.set(str(discovery_value))
         self.access_concurrency_var.set(str(access_value))

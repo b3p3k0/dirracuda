@@ -32,8 +32,8 @@
   "connection": {
     "timeout": 15,
     "port_check_timeout": 5,
-    "rate_limit_delay": 1,
-    "share_access_delay": 2
+    "rate_limit_delay": 0,
+    "share_access_delay": 0
   },
   "discovery": {
     "max_concurrent_hosts": 10,
@@ -65,7 +65,7 @@
   "file_collection": {
     "max_files_per_target": 3,
     "max_total_size_mb": 500,
-    "download_delay_seconds": 2,
+    "download_delay_seconds": 0.5,
     "max_directory_depth": 3,
     "enumeration_timeout_seconds": 120,
     "included_extensions": [
