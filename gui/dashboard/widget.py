@@ -1017,9 +1017,7 @@ class DashboardWidget:
             return
 
         # Main status
-        total_servers = summary.get("total_servers", 0)
-        servers_with_accessible_shares = summary.get("servers_with_accessible_shares", 0)
-        total_shares = summary.get("total_shares", 0)
+        protocol_counts = summary.get("protocol_host_counts") or {}
         last_scan = summary.get("last_scan", "Never")
 
         if last_scan != "Never":
@@ -1034,10 +1032,19 @@ class DashboardWidget:
         else:
             formatted_time = "Never"
 
+        hosts = {
+            protocol: int((protocol_counts.get(protocol) or {}).get("hosts", 0) or 0)
+            for protocol in ("smb", "ftp", "http")
+        }
+        accessible = sum(
+            int((counts or {}).get("accessible", 0) or 0)
+            for counts in protocol_counts.values()
+        )
         status_text = (
             f"Last Scan: {formatted_time} | "
-            f"DB: {total_servers:,} servers, {servers_with_accessible_shares:,} with accessible shares, "
-            f"{total_shares:,} total shares"
+            f"DB: {sum(hosts.values()):,} hosts "
+            f"(SMB {hosts['smb']:,} · FTP {hosts['ftp']:,} · HTTP {hosts['http']:,}), "
+            f"{accessible:,} accessible"
         )
         self.status_text.set(status_text)
         self._status_summary_initialized = True

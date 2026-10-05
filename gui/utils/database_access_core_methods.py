@@ -316,6 +316,11 @@ def get_dashboard_summary(self) -> Dict[str, Any]:
                 "display": "4 / 2"
             },
             "last_scan": "2025-01-21T14:20:00",
+            "protocol_host_counts": {
+                "smb": {"hosts": 7, "accessible": 5},
+                "ftp": {"hosts": 3, "accessible": 2},
+                "http": {"hosts": 4, "accessible": 3},
+            },
             "database_size_mb": 2.3
         }
     else:
@@ -332,6 +337,51 @@ def get_dashboard_stats(self) -> Dict[str, Any]:
         Dictionary with dashboard metrics (same as get_dashboard_summary)
     """
     return self.get_dashboard_summary()
+
+_PROTOCOL_HOST_COUNT_QUERIES = {
+    "smb": """
+        SELECT
+            (SELECT COUNT(*) FROM smb_servers WHERE status = 'active') AS hosts,
+            (SELECT COUNT(DISTINCT sa.server_id) FROM share_access sa
+             JOIN smb_servers s ON s.id = sa.server_id AND s.status = 'active'
+             WHERE sa.accessible = 1) AS accessible
+    """,
+    # FTP/HTTP "accessible" uses each host's latest access row, as the Server List does.
+    "ftp": """
+        SELECT
+            (SELECT COUNT(*) FROM ftp_servers WHERE status = 'active') AS hosts,
+            (SELECT COUNT(*) FROM ftp_access a
+             JOIN (SELECT server_id, MAX(id) AS max_id FROM ftp_access GROUP BY server_id) l
+               ON l.max_id = a.id
+             JOIN ftp_servers f ON f.id = a.server_id AND f.status = 'active'
+             WHERE a.accessible = 1) AS accessible
+    """,
+    "http": """
+        SELECT
+            (SELECT COUNT(*) FROM http_servers WHERE status = 'active') AS hosts,
+            (SELECT COUNT(*) FROM http_access a
+             JOIN (SELECT server_id, MAX(id) AS max_id FROM http_access GROUP BY server_id) l
+               ON l.max_id = a.id
+             JOIN http_servers h ON h.id = a.server_id AND h.status = 'active'
+             WHERE a.accessible = 1) AS accessible
+    """,
+}
+
+
+def _query_protocol_host_counts(conn: sqlite3.Connection) -> Dict[str, Dict[str, int]]:
+    """Return active and accessible host counts per protocol; missing tables count as 0."""
+    counts = {}
+    for protocol, query in _PROTOCOL_HOST_COUNT_QUERIES.items():
+        try:
+            row = conn.execute(query).fetchone()
+            counts[protocol] = {
+                "hosts": int(row["hosts"] or 0),
+                "accessible": int(row["accessible"] or 0),
+            }
+        except sqlite3.OperationalError:
+            counts[protocol] = {"hosts": 0, "accessible": 0}
+    return counts
+
 
 def _query_dashboard_summary(self) -> Dict[str, Any]:
     """Execute dashboard summary query."""
@@ -405,6 +455,7 @@ def _query_dashboard_summary(self) -> Dict[str, Any]:
             "high_risk_vulnerabilities": result["high_risk_vulnerabilities"] or 0,
             "recent_discoveries": recent_discoveries,
             "last_scan": last_scan or "Never",
+            "protocol_host_counts": _query_protocol_host_counts(conn),
             "database_size_mb": round((size_result["size"] or 0) / (1024 * 1024), 1)
         }
 

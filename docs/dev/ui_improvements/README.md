@@ -142,18 +142,18 @@ Status: done 2026-10-05. HI chose UTC everywhere over local conversion.
   values stay local because the scan cohort queries use them; only the
   display converts.
 
-### B2 — Dashboard `DB:` counts are SMB-only
+### B2 — Dashboard `DB:` counts all protocols (done)
 
-Status: not started. HI queued it as the next card on 2026-10-05.
+Status: done 2026-10-05. HI chose option A.
 
-- Problem: the status line reads `DB: N servers, N with accessible shares,
-  N total shares`. `_query_dashboard_summary` in
-  `gui/utils/database_access_core_methods.py` counts only `smb_servers` and
-  `share_access`. FTP and HTTP hosts never appear. Seen under Xvfb: one HTTP
-  host, `DB: 0 servers`.
-- `total_servers` and `accessible_shares` also feed
-  `gui/components/database_setup_dialog.py` ("SMB servers:" wording), so
-  changing the keys' meaning affects that dialog.
-- To decide: wording and breakdown. For example `DB: 12 hosts (SMB 8 · FTP 3 ·
-  HTTP 1)`, or keep `servers` and sum all protocols. What "accessible" means
-  for FTP (`ftp_access.accessible`) and HTTP (`http_access`) needs a check.
+- The status line now reads `DB: N hosts (SMB n · FTP n · HTTP n), N accessible`.
+  Before, it counted SMB only (`DB: N servers, N with accessible shares,
+  N total shares`).
+- New summary field `protocol_host_counts` holds active hosts and accessible
+  hosts per protocol. Existing SMB fields (`total_servers`,
+  `accessible_shares`, and so on) keep their meaning for the database import
+  dialog and the `scan_manager.py` estimate fallback.
+- Accessible: SMB = at least one accessible share. FTP and HTTP = the latest
+  access row is accessible, matching the Server List. Only `status='active'`
+  hosts count. A missing protocol table counts as 0.
+- `total shares` was dropped from the line; it has no FTP or HTTP meaning.

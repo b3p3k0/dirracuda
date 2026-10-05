@@ -1,4 +1,4 @@
-"""Dashboard summary "Last Scan" spans SMB, FTP, and HTTP hosts."""
+"""Dashboard summary "Last Scan" and host counts span SMB, FTP, and HTTP."""
 
 import sqlite3
 import sys
@@ -94,3 +94,37 @@ def test_cancelled_window_is_ignored(db_path, window):
         datetime(2026, 10, 5, 9, 45, tzinfo=timezone.utc), cancelled=True
     )
     assert _last_scan(db_path) == "2026-10-05 08:00:00"
+
+
+def _counts(db_path):
+    summary = DatabaseReader(db_path=str(db_path), cache_duration=0).get_dashboard_summary()
+    return summary["protocol_host_counts"]
+
+
+def test_protocol_host_counts(db_path):
+    conn = sqlite3.connect(db_path)
+    conn.executescript("""
+        INSERT INTO smb_servers (id, ip_address) VALUES (1, '198.51.100.1'), (2, '198.51.100.2');
+        INSERT INTO smb_servers (id, ip_address, status) VALUES (3, '198.51.100.3', 'inactive');
+        INSERT INTO share_access (server_id, session_id, share_name, accessible) VALUES
+            (1, 0, 'a', 1), (1, 0, 'b', 1), (2, 0, 'c', 0), (3, 0, 'd', 1);
+        INSERT INTO ftp_servers (id, ip_address) VALUES (1, '198.51.100.4'), (2, '198.51.100.5');
+        INSERT INTO ftp_access (server_id, accessible) VALUES (1, 1), (1, 0), (2, 0), (2, 1);
+        INSERT INTO http_servers (id, ip_address) VALUES (1, '198.51.100.6');
+        INSERT INTO http_access (server_id, accessible) VALUES (1, 1);
+    """)
+    conn.commit()
+    conn.close()
+    # FTP host 1 lost access on its latest check; host 2 gained it.
+    assert _counts(db_path) == {
+        "smb": {"hosts": 2, "accessible": 1},
+        "ftp": {"hosts": 2, "accessible": 1},
+        "http": {"hosts": 1, "accessible": 1},
+    }
+
+
+def test_missing_protocol_tables_count_as_zero(db_path):
+    conn = sqlite3.connect(db_path)
+    conn.executescript("DROP TABLE http_access; DROP TABLE http_servers;")
+    conn.close()
+    assert _counts(db_path)["http"] == {"hosts": 0, "accessible": 0}

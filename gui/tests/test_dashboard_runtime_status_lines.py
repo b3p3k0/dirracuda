@@ -82,6 +82,11 @@ def _make_summary_dashboard() -> DashboardWidget:
         "servers_with_accessible_shares": 5,
         "total_shares": 34,
         "last_scan": "2026-05-06T09:10:00",
+        "protocol_host_counts": {
+            "smb": {"hosts": 12, "accessible": 5},
+            "ftp": {"hosts": 3, "accessible": 2},
+            "http": {"hosts": 1234, "accessible": 0},
+        },
     }
     return dash
 
@@ -138,7 +143,7 @@ def test_refresh_after_database_change_updates_locked_summary_without_runtime_re
     dash.refresh_after_database_change(refresh_runtime_status=False)
 
     assert dash.db_reader.clear_cache_calls == 1
-    assert "DB: 12 servers, 5 with accessible shares, 34 total shares" in dash.status_text.get()
+    assert "DB: 1,249 hosts (SMB 12 · FTP 3 · HTTP 1,234), 7 accessible" in dash.status_text.get()
     assert dash.update_time_label.kwargs["text"].startswith("Updated: ")
     assert dash._status_static_mode is True
     assert dash._status_summary_initialized is True
