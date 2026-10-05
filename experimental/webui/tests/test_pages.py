@@ -570,3 +570,13 @@ def test_no_inline_style_attr_on_key_routes(logged_in, client):
         r = logged_in.get(path)
         assert r.status_code == 200, f"{path} returned {r.status_code}"
         assert not _INLINE_STYLE_RE.search(r.text), f"Inline style= attr found on {path}"
+
+
+@pytest.mark.parametrize("page", ["/scans/reddit", "/scans/searxng"])
+def test_provider_probe_worker_options(logged_in, page):
+    response = logged_in.get(page)
+    assert response.status_code == 200
+    select = re.search(r'<select id="probe-workers".*?</select>', response.text, re.S).group(0)
+    assert 'data-default="12"' in select
+    assert '<option value="12" selected>12</option>' in select
+    assert [int(value) for value in re.findall(r'<option value="(\d+)"', select)] == list(range(1, 17))

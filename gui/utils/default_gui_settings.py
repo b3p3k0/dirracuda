@@ -5,6 +5,7 @@ Separated from SettingsManager to keep the manager implementation concise.
 """
 
 from datetime import datetime
+from shared.probe_concurrency import PROBE_WORKERS_DEFAULT
 from shared.path_service import get_paths
 
 _PATHS = get_paths()
@@ -109,7 +110,7 @@ DEFAULT_GUI_SETTINGS = {
         'max_files_per_directory': 5,
         'share_timeout_seconds': 10,
         'status_by_ip': {},
-        'batch_max_workers': 3
+        'batch_max_workers': PROBE_WORKERS_DEFAULT
     },
     'extract': {
         'last_directory': '',

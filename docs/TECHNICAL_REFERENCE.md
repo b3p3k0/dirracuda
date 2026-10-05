@@ -384,6 +384,15 @@ Typed accessors (`get_shodan_api_key()`, `get_ftp_config()`, `get_http_config()`
 
 ### 3.3 GUI/User Preferences
 
+Batch probe concurrency uses `shared/probe_concurrency.py`: default **12** workers,
+minimum **1**, maximum **16**, without CPU-count scaling. Saved
+`probe.batch_max_workers` values still win (clamped to 1–16); no settings migration
+is performed. Dashboard, Server List, provider dialogs, legacy sidecar browsers,
+and Reddit/Self-hosted Search services share this policy. Web UI provider requests
+accept 1–16 or an unset value for the default, and their worker selectors default
+to 12. Extract workers, browser download workers, and CLI `max_concurrent_hosts`
+retain their separate policies.
+
 GUI/user prefs are now canonical in:
 
 - `~/.dirracuda/conf.d/prefs/user-prefs.json`

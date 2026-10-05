@@ -28,12 +28,10 @@
     </div>
     <div class="form-row" id="probe-workers-row">
       <label for="probe-workers">Probe workers</label>
-      <select id="probe-workers" name="probe-workers">
-        <option value="1">1</option>
-        <option value="2">2</option>
-        <option value="3" selected>3</option>
-        <option value="4">4</option>
-        <option value="8">8</option>
+      <select id="probe-workers" name="probe-workers" data-default="{{ probe_workers_default }}">
+        {% for workers in range(probe_workers_min, probe_workers_max + 1) %}
+        <option value="{{ workers }}"{% if workers == probe_workers_default %} selected{% endif %}>{{ workers }}</option>
+        {% endfor %}
       </select>
     </div>
   </div>

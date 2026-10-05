@@ -46,6 +46,7 @@ from gui.utils.sherlock_risk_display import (
 )
 from gui.components.scan_results_dialog import show_scan_results_dialog
 from gui.components.batch_summary_dialog import show_batch_summary_dialog
+from shared.probe_concurrency import resolve_probe_workers
 from shared.config import resolve_http_allow_insecure_tls
 from shared.sherlock import default_settings, settings_from_dict
 
@@ -529,8 +530,7 @@ def execute_batch_probe(
     else:
         probe_tls = bool(allow_insecure_tls)
     # Load probe settings
-    worker_count = int(dash.settings_manager.get_setting('probe.batch_max_workers', 3))
-    worker_count = max(1, min(8, worker_count))
+    worker_count = resolve_probe_workers(dash.settings_manager)
     max_dirs = int(dash.settings_manager.get_setting('probe.max_directories_per_share', 3))
     max_files = int(dash.settings_manager.get_setting('probe.max_files_per_directory', 5))
     timeout_seconds = int(dash.settings_manager.get_setting('probe.share_timeout_seconds', 10))

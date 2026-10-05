@@ -30,6 +30,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, Optional
 
+from shared.probe_concurrency import PROBE_WORKERS_DEFAULT, clamp_probe_workers
 from experimental.redseek.client import (
     FetchError,
     FetchResult,
@@ -192,11 +193,7 @@ def _make_preview_note(title: Optional[str], body: Optional[str]) -> Optional[st
 
 
 def _resolve_probe_worker_count(options: IngestOptions) -> int:
-    raw = getattr(options, "probe_worker_count", None)
-    try:
-        return max(1, min(8, int(raw))) if raw is not None else 3
-    except (TypeError, ValueError):
-        return 3
+    return clamp_probe_workers(getattr(options, "probe_worker_count", None))
 
 
 def _resolve_probe_limits(options: IngestOptions) -> dict[str, int]:
@@ -221,7 +218,7 @@ def _probe_targets_for_keys(
     db_path: Optional[Path],
     *,
     config_path: Optional[str] = None,
-    worker_count: int = 3,
+    worker_count: int = PROBE_WORKERS_DEFAULT,
     probe_limits: Optional[dict[str, int]] = None,
 ) -> dict[str, int]:
     """Probe current-run concrete targets and persist sidecar probe fields."""
@@ -271,10 +268,7 @@ def _probe_targets_for_keys(
     except Exception:
         patterns = None
 
-    try:
-        resolved_workers = max(1, min(8, int(worker_count)))
-    except (TypeError, ValueError):
-        resolved_workers = 3
+    resolved_workers = clamp_probe_workers(worker_count)
     max_workers = max(1, min(resolved_workers, len(targets)))
 
     try:

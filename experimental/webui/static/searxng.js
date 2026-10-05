@@ -156,7 +156,8 @@ function persistPrefs() {
     instance_url: document.getElementById('instance-url').value,
     max_results: (maxResults >= 1 && maxResults <= 1000) ? maxResults : 500,
     bulk_probe: document.getElementById('bulk-probe').checked,
-    probe_workers: parseInt(document.getElementById('probe-workers').value, 10) || 3
+    probe_workers: parseInt(document.getElementById('probe-workers').value, 10) ||
+      Number(document.getElementById('probe-workers').dataset.default)
   });
 }
 
@@ -189,7 +190,8 @@ document.getElementById('searxng-form').addEventListener('submit', async functio
   var query = (document.getElementById('query').value || '').trim();
   var maxResults = parseInt(document.getElementById('max-results').value, 10);
   var bulkProbe = document.getElementById('bulk-probe').checked;
-  var probeWorkers = parseInt(document.getElementById('probe-workers').value, 10) || 3;
+  var probeWorkers = parseInt(document.getElementById('probe-workers').value, 10) ||
+      Number(document.getElementById('probe-workers').dataset.default);
 
   if (!instanceUrl || !/^https?:\/\/.+/.test(instanceUrl)) {
     setStatus('Instance URL must start with http:// or https://.', 'status-warn');

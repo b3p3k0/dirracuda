@@ -1096,3 +1096,37 @@ def test_run_background_fetch_closes_via_ui_poll_without_destroy_after(monkeypat
     assert "poll_done" in dialog.after_callbacks
     assert "destroy" not in dialog.after_callbacks
     assert dialog.destroy_calls >= 1
+
+
+@pytest.mark.parametrize("saved_workers, expected", [(None, 12), (3, 3), (20, 16)])
+def test_execute_batch_probe_executor_worker_policy(monkeypatch, saved_workers, expected):
+    from concurrent.futures import Future
+
+    _patch_fake_probe_dialog_stack(monkeypatch)
+    dash = _make_probe_test_dash()
+    if saved_workers is not None:
+        dash.settings_manager.get_setting = lambda key, default=None: (
+            saved_workers if key == "probe.batch_max_workers" else default
+        )
+    captured = []
+
+    class Executor:
+        def __init__(self, *, max_workers, **kwargs):
+            captured.append(max_workers)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+        def submit(self, fn, *args, **kwargs):
+            future = Future()
+            future.set_result(fn(*args, **kwargs))
+            return future
+
+    monkeypatch.setattr("gui.components.dashboard_batch_ops.ThreadPoolExecutor", Executor)
+    results = dash._execute_batch_probe([{"ip_address": "192.0.2.1", "host_type": "S"}])
+    assert captured == [expected]
+    assert len(results) == 1
+    assert results[0]["status"] == "success"

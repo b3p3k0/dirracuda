@@ -1494,7 +1494,8 @@ def test_run_dork_search_bulk_probe_passes_configured_worker_count(tmp_path: Pat
     assert mock_probe.call_args.kwargs["worker_count"] == 7
 
 
-def test_run_dork_search_bulk_probe_invalid_worker_count_falls_back_to_default(tmp_path: Path) -> None:
+@pytest.mark.parametrize("worker_count, expected", [("bad", 12), (None, 12), (20, 16)])
+def test_run_dork_search_bulk_probe_worker_policy(tmp_path: Path, worker_count, expected) -> None:
     db = tmp_path / "se_dork.db"
     rows = _results_rows(1)
     opts = SimpleNamespace(
@@ -1503,7 +1504,7 @@ def test_run_dork_search_bulk_probe_invalid_worker_count_falls_back_to_default(t
         max_results=10,
         bulk_probe_enabled=True,
         probe_config_path=None,
-        probe_worker_count="bad",
+        probe_worker_count=worker_count,
     )
 
     with patch("experimental.se_dork.service.run_reachability_check", return_value=_ok_preflight()):
@@ -1530,7 +1531,7 @@ def test_run_dork_search_bulk_probe_invalid_worker_count_falls_back_to_default(t
 
     assert result.status == RUN_STATUS_DONE
     assert mock_probe.call_count == 1
-    assert mock_probe.call_args.kwargs["worker_count"] == 3
+    assert mock_probe.call_args.kwargs["worker_count"] == expected
 
 
 # ---------------------------------------------------------------------------

@@ -32,6 +32,7 @@ from urllib.parse import urlparse
 import tkinter as tk
 from tkinter import ttk
 
+from shared.probe_concurrency import resolve_probe_workers
 from gui.components.unified_browser_window import open_ftp_http_browser
 from gui.components.pry_status_dialog import BatchStatusDialog
 from gui.utils.running_tasks import get_running_task_registry
@@ -493,13 +494,7 @@ class SeDorkBrowserWindow:
         return None
 
     def _resolve_probe_worker_count(self) -> int:
-        sm = self._settings_manager
-        if sm is None:
-            return 3
-        try:
-            return max(1, min(8, int(sm.get_setting("probe.batch_max_workers", 3))))
-        except Exception:
-            return 3
+        return resolve_probe_workers(self._settings_manager)
 
     def _on_probe_selected(self) -> None:
         rows = self._selected_rows()

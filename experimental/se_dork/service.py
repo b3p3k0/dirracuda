@@ -37,6 +37,7 @@ import urllib.request
 from pathlib import Path
 from typing import Callable, Optional
 
+from shared.probe_concurrency import clamp_probe_workers
 from experimental.se_dork.backends import is_degoog_endpoint, normalize_results, search_url
 from experimental.se_dork.client import run_reachability_check
 from experimental.se_dork.models import (
@@ -1060,15 +1061,7 @@ def run_dork_search(
         run_allow_insecure_tls = resolve_http_allow_insecure_tls(probe_config_path)
     else:
         run_allow_insecure_tls = bool(_run_tls_override)
-    raw_probe_worker_count = getattr(options, "probe_worker_count", None)
-    try:
-        probe_worker_count = (
-            max(1, min(8, int(raw_probe_worker_count)))
-            if raw_probe_worker_count is not None
-            else 3
-        )
-    except (TypeError, ValueError):
-        probe_worker_count = 3
+    probe_worker_count = clamp_probe_workers(getattr(options, "probe_worker_count", None))
     probe_limits = _resolve_probe_limits(options)
 
     totals = _PageProcessTotals()

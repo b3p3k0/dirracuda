@@ -27,6 +27,7 @@ from gui.utils.scan_manager import get_scan_manager
 from gui.utils.dialog_helpers import ensure_dialog_focus
 from gui.utils.template_store import TemplateStore
 from gui.components.pry_status_dialog import BatchStatusDialog
+from shared.probe_concurrency import clamp_probe_workers
 from shared.db_migrations import run_migrations
 from gui.components.server_list_window import export, details, filters, table
 from gui.components.batch_extract_dialog import BatchExtractSettingsDialog
@@ -69,7 +70,11 @@ class ServerListWindowBatchMixin(ServerListWindowBatchOperationsMixin, ServerLis
                 messagebox.showinfo("Task already running", f"A task is already running for host {ip}. Please wait or stop it first.")
                 return
 
-        worker_count = max(1, min(8, int(options.get("worker_count", 1))))
+        if job_type == "probe":
+            worker_count = clamp_probe_workers(options.get("worker_count"))
+        else:
+            # Non-probe jobs keep the legacy default 1 / cap 8.
+            worker_count = max(1, min(8, int(options.get("worker_count", 1))))
         cancel_event = threading.Event()
         executor = ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix=f"{job_type}-batch")
         options = {**options, "worker_count": worker_count}

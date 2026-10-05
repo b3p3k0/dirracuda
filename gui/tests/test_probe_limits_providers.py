@@ -20,7 +20,7 @@ class _Settings:
 
 def test_resolve_probe_limits_defaults_without_settings():
     assert resolve_probe_limits(None) == {
-        "workers": 3, "max_dirs": 3, "max_files": 5, "timeout": 10, "max_depth": 1,
+        "workers": 12, "max_dirs": 3, "max_files": 5, "timeout": 10, "max_depth": 1,
     }
 
 
@@ -33,7 +33,7 @@ def test_resolve_probe_limits_reads_and_clamps_saved_values():
         "probe.max_depth_levels": 5,
     })
     assert resolve_probe_limits(sm) == {
-        "workers": 8, "max_dirs": 7, "max_files": 9, "timeout": 1, "max_depth": 3,
+        "workers": 16, "max_dirs": 7, "max_files": 9, "timeout": 1, "max_depth": 3,
     }
 
 

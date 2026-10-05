@@ -7,6 +7,7 @@ from urllib.parse import urlparse
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from shared.probe_concurrency import PROBE_WORKERS_MIN, PROBE_WORKERS_MAX
 from experimental.redseek.models import DEFAULT_MAX_POSTS, MAX_POSTS
 from experimental.se_dork.models import DEFAULT_MAX_RESULTS, MAX_RESULTS
 
@@ -71,8 +72,10 @@ class SearxngRunRequest(BaseModel):
     def _validate_probe_worker_count(cls, value: Optional[int]) -> Optional[int]:
         if value is None:
             return None
-        if value < 1 or value > 8:
-            raise ValueError("probe_worker_count must be between 1 and 8")
+        if value < PROBE_WORKERS_MIN or value > PROBE_WORKERS_MAX:
+            raise ValueError(
+                f"probe_worker_count must be between {PROBE_WORKERS_MIN} and {PROBE_WORKERS_MAX}"
+            )
         return value
 
 
@@ -141,8 +144,10 @@ class RedditRunRequest(BaseModel):
     def _validate_probe_worker_count(cls, value: Optional[int]) -> Optional[int]:
         if value is None:
             return None
-        if value < 1 or value > 8:
-            raise ValueError("probe_worker_count must be between 1 and 8")
+        if value < PROBE_WORKERS_MIN or value > PROBE_WORKERS_MAX:
+            raise ValueError(
+                f"probe_worker_count must be between {PROBE_WORKERS_MIN} and {PROBE_WORKERS_MAX}"
+            )
         return value
 
     @field_validator("mode")

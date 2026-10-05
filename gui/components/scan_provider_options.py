@@ -10,6 +10,7 @@ from gui.utils.scrollable_body import wrap_label
 import tkinter as tk
 from typing import Any, Callable, Dict
 
+from shared.probe_concurrency import resolve_probe_workers
 from experimental.redseek.models import DEFAULT_MAX_POSTS, MAX_POSTS
 from experimental.se_dork.models import DEFAULT_MAX_RESULTS, MAX_RESULTS
 
@@ -48,7 +49,6 @@ def coerce_searxng_tuning(
 # Saved probe limits (written by ProbeConfigDialog / batch probe dialogs).
 _PROBE_LIMIT_SETTINGS = (
     # key, setting name, default, min, max
-    ("workers", "probe.batch_max_workers", 3, 1, 8),
     ("max_dirs", "probe.max_directories_per_share", 3, 1, None),
     ("max_files", "probe.max_files_per_directory", 5, 1, None),
     ("timeout", "probe.share_timeout_seconds", 10, 1, None),
@@ -58,7 +58,7 @@ _PROBE_LIMIT_SETTINGS = (
 
 def resolve_probe_limits(settings_manager: Any) -> Dict[str, int]:
     """Return saved bulk-probe limits, clamped; bad values fall back per field."""
-    limits: Dict[str, int] = {}
+    limits: Dict[str, int] = {"workers": resolve_probe_workers(settings_manager)}
     for key, setting, default, lo, hi in _PROBE_LIMIT_SETTINGS:
         value = default
         if settings_manager is not None:

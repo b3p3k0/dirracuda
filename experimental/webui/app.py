@@ -73,6 +73,7 @@ from experimental.webui.tasks import (
     ScanRequest,
     estimate_query_credits_by_protocol,
 )
+from shared.probe_concurrency import PROBE_WORKERS_DEFAULT, PROBE_WORKERS_MIN, PROBE_WORKERS_MAX
 from shared.config import load_config as load_main_config
 from shared.db_path_resolution import normalize_database_path
 from shared.path_service import get_paths
@@ -374,6 +375,11 @@ def create_app(
         app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
 
     templates = Jinja2Templates(directory=str(_TEMPLATES_DIR))
+    templates.env.globals.update(
+        probe_workers_default=PROBE_WORKERS_DEFAULT,
+        probe_workers_min=PROBE_WORKERS_MIN,
+        probe_workers_max=PROBE_WORKERS_MAX,
+    )
     templates.env.globals["webui_security_mode"] = security_mode(cfg)
     templates.env.globals["webui_security_warnings"] = security_warnings(cfg)
 

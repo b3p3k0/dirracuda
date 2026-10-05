@@ -26,6 +26,7 @@ from gui.utils.probe_snapshot_summary import summarize_probe_snapshot
 from gui.utils.sherlock_post_probe import run_sherlock_after_probe
 from gui.utils.dialog_helpers import ensure_dialog_focus
 from gui.utils.logging_config import get_logger
+from shared.probe_concurrency import PROBE_WORKERS_MAX, clamp_probe_workers, resolve_probe_workers
 from shared.config import resolve_http_allow_insecure_tls
 from shared.quarantine import create_quarantine_dir
 
@@ -1037,11 +1038,7 @@ class ServerListWindowBatchOperationsMixin:
 
     def _prompt_probe_batch_settings(self, target_count: int) -> Optional[Dict[str, Any]]:
         config = details._load_probe_config(self.settings_manager)
-        default_workers = 3
-        if self.settings_manager:
-            default_workers = int(self.settings_manager.get_setting('probe.batch_max_workers', default_workers))
-
-        default_workers = max(1, min(8, default_workers))
+        default_workers = resolve_probe_workers(self.settings_manager)
 
         dialog = tk.Toplevel(self.window)
         dialog.title("Batch Probe Settings")
@@ -1061,7 +1058,7 @@ class ServerListWindowBatchOperationsMixin:
             tk.Label(dialog, text=label).grid(row=row, column=0, padx=10, pady=5, sticky="w")
             tk.Entry(dialog, textvariable=var, width=10).grid(row=row, column=1, padx=10, pady=5, sticky="w")
 
-        tk.Label(dialog, text="Worker threads (max 8):").grid(row=1, column=0, padx=10, pady=5, sticky="w")
+        tk.Label(dialog, text=f"Worker threads (max {PROBE_WORKERS_MAX}):").grid(row=1, column=0, padx=10, pady=5, sticky="w")
         tk.Entry(dialog, textvariable=worker_var, width=10).grid(row=1, column=1, padx=10, pady=5, sticky="w")
 
         add_labeled_entry(2, "Max directories/share:", max_dirs_var)
@@ -1073,7 +1070,7 @@ class ServerListWindowBatchOperationsMixin:
 
         def on_start():
             try:
-                workers = max(1, min(8, int(worker_var.get())))
+                workers = clamp_probe_workers(worker_var.get())
                 max_dirs = max(1, int(max_dirs_var.get()))
                 max_files = max(1, int(max_files_var.get()))
                 timeout_val = max(1, int(timeout_var.get()))

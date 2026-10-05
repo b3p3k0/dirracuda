@@ -857,8 +857,8 @@ def test_on_probe_selected_invalid_worker_setting_falls_back_to_default():
                                 b._on_probe_selected()
 
     assert len(_InlineExecutor.created) == 1
-    # default fallback is 3; selected rows are 5 so pool remains 3
-    assert _InlineExecutor.created[0].max_workers == 3
+    # Default fallback is 12; the pool needs only the five selected rows.
+    assert _InlineExecutor.created[0].max_workers == 5
 
 
 def test_on_context_probe_url_hides_menu_and_delegates():

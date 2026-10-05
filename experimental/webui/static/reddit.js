@@ -199,7 +199,8 @@ function persistPrefs() {
     sort: document.getElementById('sort').value,
     max_posts: (maxPosts >= 1 && maxPosts <= 100) ? maxPosts : 100,
     bulk_probe: document.getElementById('bulk-probe').checked,
-    probe_workers: parseInt(document.getElementById('probe-workers').value, 10) || 3
+    probe_workers: parseInt(document.getElementById('probe-workers').value, 10) ||
+      Number(document.getElementById('probe-workers').dataset.default)
   });
 }
 
@@ -237,7 +238,8 @@ document.getElementById('reddit-form').addEventListener('submit', async function
   var includeNsfw = document.getElementById('include-nsfw').checked;
   var replaceCache = document.getElementById('replace-cache').checked;
   var bulkProbe = document.getElementById('bulk-probe').checked;
-  var probeWorkers = parseInt(document.getElementById('probe-workers').value, 10) || 3;
+  var probeWorkers = parseInt(document.getElementById('probe-workers').value, 10) ||
+      Number(document.getElementById('probe-workers').dataset.default);
 
   if (mode === 'search' && !query) {
     setStatus('Query is required for search mode.', 'status-warn');

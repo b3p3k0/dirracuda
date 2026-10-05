@@ -40,8 +40,8 @@ scope and expected payoff.
 | F1 | Live DB is `journal_mode=delete`. | AA read `~/.dirracuda/dirracuda.db`, a **0-byte legacy stub**. The runtime DB is `~/.dirracuda/data/dirracuda.db` (`resolve_runtime_main_db_path()`). Its header (bytes 18–19 = `02 02`) and a read-only `PRAGMA journal_mode` both say **WAL**. The CLI's `tools/db_manager.py:103` set it. | No on-disk mode change is needed for the live DB. Card B's WAL work makes new or recreated DBs WAL at once and makes the mode explicit. Rollback needs no file action. |
 | F2 | Live `busy_timeout=5000`, `synchronous=2`. | Both are per-connection values, not file state. 5000 ms is Python's default `timeout=5.0`. | Card B sets `busy_timeout` explicitly on every RW opener. |
 | F3 | Pacing sleeps make the Dashboard batch probe feel serial. | The GUI probe runners (`gui/utils/probe_runner.py`, `ftp_probe_runner.py`, `http_probe_runner.py`) **never sleep**. `rate_limit_delay` paces CLI SMB auth (`commands/discover/auth.py`). `share_access_delay` paces the CLI SMB share loop (`commands/access/operation.py:248`). `download_delay_seconds` paces **extract only** (`gui/utils/extract_runner.py:545`, `protocol_extract_runner.py:391,876`). | Card C speeds CLI SMB scans and extract. It does not speed the Dashboard batch probe. The Dashboard win comes from Cards B1 + A. |
-| F4 | Server List batch defaults to 1 worker. | `batch.py:72` default 1 is a fallback only. The real dialog (`batch_operations.py:1040-1044`) already reads `probe.batch_max_workers`, default 3. | Still folded into Card A. Lower urgency than AA implied. |
-| F5 | Two worker sites (Dashboard, Server List). | **11** probe-worker sites hard-code default 3 and/or cap 8 (list in Card A). | Card A covers all 11. |
+| F4 | Server List batch defaults to 1 worker. | Before CPM-A, the dialog supplied the saved `probe.batch_max_workers` value. CPM-A now shares default 12/cap 16 across the dialog and probe executor; other job types retain default 1/cap 8. | Folded into Card A. |
+| F5 | Two worker sites (Dashboard, Server List). | **11** files were listed for CPM-A. Implementation also found a second Redseek runner clamp and Web UI provider selectors/JavaScript fallbacks. | Card A covers all listed and newly found probe-policy sites. |
 
 Also found (new, Blocker-class latent bug, fixed by Card B1):
 `_get_connection` (`gui/utils/database_access_core_methods.py:242-284`) is a
@@ -252,26 +252,31 @@ Behavior change to call out: FTP/HTTP CLI persistence moves from a 5 s to a
    `experimental/` services and Web UI models must import it without Tk):
    - `PROBE_WORKERS_DEFAULT = 12`, `PROBE_WORKERS_MAX = 16`,
      `PROBE_WORKERS_MIN = 1`.
-   - `clamp_probe_workers(value) -> int`: `None`, non-int, `inf`/`nan` →
-     default; else clamp to [1, 16].
+   - `clamp_probe_workers(value) -> int`: `None`, non-numeric, bool, `inf`/`nan` →
+     default; otherwise coerce with `int` and clamp to [1, 16].
    - `resolve_probe_workers(settings_manager) -> int`: reads
      `probe.batch_max_workers` (default 12) and clamps. Any exception →
      default.
 2. **Replace every hard-coded probe default/cap** (all 11 sites):
 
-| # | File | Line(s) | Today |
-|---|---|---|---|
-| 1 | `gui/components/dashboard_batch_ops.py` | 532-533 | default 3, cap 8 |
-| 2 | `gui/components/server_list_window/actions/batch.py` | 72 | default 1, cap 8 (probe jobs only — see note) |
-| 3 | `gui/components/server_list_window/actions/batch_operations.py` | 1040-1044, ~1076 | default 3, cap 8 |
-| 4 | `gui/components/scan_preflight.py` | 159, 194 (label "max 8"), 244 | default 3, cap 8 |
-| 5 | `gui/components/scan_provider_options.py` | 51 | `("workers", ..., 3, 1, 8)` |
-| 6 | `gui/components/reddit_browser_window.py` | 705 | default 3, cap 8 |
-| 7 | `gui/components/se_dork_browser_window.py` | 500 | default 3, cap 8 |
-| 8 | `experimental/se_dork/service.py` | 1063-1071 | default 3, cap 8 |
-| 9 | `experimental/redseek/service.py` | 194-200 | default 3, cap 8 |
-| 10 | `experimental/webui/experimental_models.py` | 69-75, 139-145 | validator 1–8 → 1–16, message uses the constants |
-| 11 | `gui/utils/default_gui_settings.py` | 112 | `batch_max_workers: 3` → `PROBE_WORKERS_DEFAULT` |
+| # | File | CPM-A implementation |
+|---|---|---|
+| 1 | `gui/components/dashboard_batch_ops.py` | Shared settings resolver |
+| 2 | `gui/components/server_list_window/actions/batch.py` | Shared clamp for probe only; other jobs retain default 1/cap 8 |
+| 3 | `gui/components/server_list_window/actions/batch_operations.py` | Shared resolver/clamp and cap-derived label |
+| 4 | `gui/components/scan_preflight.py` | Shared resolver/clamp and cap-derived label |
+| 5 | `gui/components/scan_provider_options.py` | Shared resolver for workers |
+| 6 | `gui/components/reddit_browser_window.py` | Shared settings resolver |
+| 7 | `gui/components/se_dork_browser_window.py` | Shared settings resolver |
+| 8 | `experimental/se_dork/service.py` | Shared clamp |
+| 9 | `experimental/redseek/service.py` | Shared resolver clamp plus runner default/clamp |
+| 10 | `experimental/webui/experimental_models.py` | Both validators use shared min/max constants |
+| 11 | `gui/utils/default_gui_settings.py` | `probe.batch_max_workers` uses `PROBE_WORKERS_DEFAULT` |
+
+   Additional sites found during CPM-A: `experimental/webui/templates/reddit.html`
+   and `searxng.html`, plus `static/reddit.js` and `searxng.js`. Selectors now
+   render 1–16 with default 12 using shared constants supplied by `app.py`;
+   JavaScript fallbacks read that rendered default. Saved browser selections win.
 
    Note on #2: `batch.py:51 _start_batch_job` serves several `job_type`s
    (`probe`, `extract`, and others; it dispatches at lines 103 and 118). Apply the

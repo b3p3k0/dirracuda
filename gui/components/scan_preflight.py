@@ -24,6 +24,7 @@ from gui.components.query_budget_dialog import (
     load_query_budget_state,
     resolve_config_path_from_settings,
 )
+from shared.probe_concurrency import PROBE_WORKERS_MAX, clamp_probe_workers, resolve_probe_workers
 from shared.config import load_config
 
 
@@ -156,7 +157,7 @@ class ProbeConfigDialog:
         self.result: Optional[Dict[str, Any]] = None
 
         defaults = {
-            "workers": 3,
+            "workers": resolve_probe_workers(self.settings),
             "max_dirs": 3,
             "max_files": 5,
             "timeout": 10,
@@ -164,7 +165,6 @@ class ProbeConfigDialog:
         }
         if self.settings:
             try:
-                defaults["workers"] = int(self.settings.get_setting('probe.batch_max_workers', defaults['workers']))
                 defaults["max_dirs"] = int(self.settings.get_setting('probe.max_directories_per_share', defaults['max_dirs']))
                 defaults["max_files"] = int(self.settings.get_setting('probe.max_files_per_directory', defaults['max_files']))
                 defaults["timeout"] = int(self.settings.get_setting('probe.share_timeout_seconds', defaults['timeout']))
@@ -191,7 +191,7 @@ class ProbeConfigDialog:
             self.theme.apply_to_widget(frame, "main_window")
         frame.pack(padx=20, pady=20)
 
-        self._add_entry(frame, "Worker threads (max 8):", self.worker_var, 0)
+        self._add_entry(frame, f"Worker threads (max {PROBE_WORKERS_MAX}):", self.worker_var, 0)
         self._add_entry(frame, "Max directories per share:", self.max_dirs_var, 1)
         self._add_entry(frame, "Max files per directory:", self.max_files_var, 2)
         self._add_entry(frame, "Share timeout (seconds):", self.timeout_var, 3)
@@ -241,7 +241,7 @@ class ProbeConfigDialog:
         try:
             data = {
                 "status": "ok",
-                "workers": max(1, min(8, int(self.worker_var.get()))),
+                "workers": clamp_probe_workers(self.worker_var.get()),
                 "max_dirs": max(1, int(self.max_dirs_var.get())),
                 "max_files": max(1, int(self.max_files_var.get())),
                 "timeout": max(1, int(self.timeout_var.get())),

@@ -217,3 +217,27 @@ def test_real_tk_worker_finishes_after_mainloop_exits(caplog):
         release.set()
     assert not delivery.pending_futures()
     assert not caplog.records
+
+
+@pytest.mark.parametrize("job_type, options, expected", [
+    ("probe", {"worker_count": 16}, 16),
+    ("probe", {}, 12),
+    ("extract", {"worker_count": 16}, 8),
+    ("extract", {}, 1),
+    ("unknown", {"worker_count": 16}, 8),
+    ("unknown", {}, 1),
+])
+def test_batch_worker_policy_is_probe_only(monkeypatch, job_type, options, expected):
+    captured = []
+
+    class Executor(ControlledExecutor):
+        def __init__(self, **kwargs):
+            captured.append(kwargs["max_workers"])
+            super().__init__(**kwargs)
+
+    monkeypatch.setattr(batch, "ThreadPoolExecutor", Executor)
+    owner = BatchHarness()
+    owner._start_batch_job(job_type, [{"ip_address": "192.0.2.1"}], options)
+    job = next(iter(owner.active_jobs.values()))
+    assert captured == [expected]
+    assert job["options"]["worker_count"] == expected
