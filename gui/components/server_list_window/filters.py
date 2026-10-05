@@ -306,7 +306,8 @@ def apply_date_filter(servers: List[Dict[str, Any]], filter_type: str) -> List[D
     if not filter_type or filter_type == "All":
         return servers
 
-    now = datetime.now()
+    # last_seen and first_seen are stored as naive UTC.
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
     cutoff_time = None
 
     if filter_type == "Last 24 Hours":
@@ -329,6 +330,8 @@ def apply_date_filter(servers: List[Dict[str, Any]], filter_type: str) -> List[D
             if date_field in server and server[date_field]:
                 try:
                     server_date = datetime.fromisoformat(server[date_field].replace("Z", "+00:00"))
+                    if server_date.tzinfo is not None:
+                        server_date = server_date.astimezone(timezone.utc).replace(tzinfo=None)
                     break
                 except (ValueError, AttributeError):
                     continue

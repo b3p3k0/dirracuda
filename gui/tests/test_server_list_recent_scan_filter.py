@@ -288,3 +288,26 @@ def test_saved_recent_scan_filter_survives_deferred_initial_load(
     assert window.tree.get_children() == (("S:1", "F:1") if enabled else ("S:1", "F:1", "H:1"))
     window.settings_manager.set_setting.assert_called_once()
     assert window.settings_manager.get_setting(PREFS_KEY)[KEY] is enabled
+
+
+@pytest.fixture
+def far_west_tz(monkeypatch):
+    import time
+    monkeypatch.setenv("TZ", "Etc/GMT+12")
+    time.tzset()
+    yield
+    monkeypatch.undo()
+    time.tzset()
+
+
+def test_date_filter_compares_in_utc(far_west_tz):
+    from datetime import timedelta
+    now = datetime.now(timezone.utc)
+    fmt = "%Y-%m-%d %H:%M:%S"
+    rows = [
+        {"ip_address": "fresh", "last_seen": (now - timedelta(hours=1)).strftime(fmt)},
+        {"ip_address": "zulu", "last_seen": (now - timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ")},
+        {"ip_address": "stale", "last_seen": (now - timedelta(hours=30)).strftime(fmt)},
+    ]
+    kept = filters.apply_date_filter(rows, "Last 24 Hours")
+    assert [row["ip_address"] for row in kept] == ["fresh", "zulu"]

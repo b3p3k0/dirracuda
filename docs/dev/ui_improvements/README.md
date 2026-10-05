@@ -127,16 +127,14 @@ Startup references: [Agent Charter](https://raw.githubusercontent.com/b3p3k0/con
 
 ## Backlog
 
-### B1 — Last Scan shows UTC as if it were local time
+### B1 — Dashboard times in UTC (done)
 
-Status: not started. HI parked it on 2026-10-05.
+Status: done 2026-10-05. HI chose UTC everywhere over local conversion.
 
-- Problem: `Last Scan` values are UTC (`CURRENT_TIMESTAMP` and the scan window
-  file). `gui/dashboard/widget.py::_update_status_display` parses the string
-  as a naive datetime and prints it unchanged, so the time is off by the local
-  UTC offset.
-- Likely fix: treat the naive value as UTC, convert to local time, then format.
-  Add a test with a fixed non-UTC offset.
-- Related: Server List `apply_date_filter` (for example `Last 24 Hours`)
-  compares local `datetime.now()` with UTC `last_seen`. See Follow-ups in
-  [RECENT_SCAN_FILTER.md](RECENT_SCAN_FILTER.md). Decide whether one card fixes both.
+- `Last Scan` and `Updated` on the dashboard both show UTC with a `UTC` label.
+  `Updated` used local time before, and `Last Scan` showed UTC with no label.
+- Server List `apply_date_filter` (`Last 24 Hours` and so on) now compares
+  in UTC. Before, it compared local `now` with UTC `last_seen`, and an
+  offset-aware value (`...Z`) raised `TypeError`.
+- Not changed: Live Scan Output `[status HH:MM:SS]` lines and CLI log lines
+  still use local time.

@@ -15,7 +15,7 @@ import threading
 import time
 import json
 from typing import Dict, List, Any, Optional, Callable
-from datetime import datetime
+from datetime import datetime, timezone
 import sys
 import os
 import queue
@@ -919,7 +919,7 @@ class DashboardWidget:
             summary = self.db_reader.get_dashboard_summary()
 
             # Update status
-            self.last_update = datetime.now()
+            self.last_update = datetime.now(timezone.utc)
             self._update_status_display(summary)
 
             # Enforce window size after data refresh to prevent auto-resizing
@@ -1026,7 +1026,9 @@ class DashboardWidget:
             # Format last scan time
             try:
                 scan_time = datetime.fromisoformat(last_scan.replace("Z", "+00:00"))
-                formatted_time = scan_time.strftime("%Y-%m-%d %H:%M")
+                if scan_time.tzinfo is not None:
+                    scan_time = scan_time.astimezone(timezone.utc)
+                formatted_time = scan_time.strftime("%Y-%m-%d %H:%M UTC")
             except:
                 formatted_time = "Unknown"
         else:
@@ -1042,7 +1044,7 @@ class DashboardWidget:
 
         # Update time
         if self.last_update:
-            update_text = f"Updated: {self.last_update.strftime('%H:%M:%S')}"
+            update_text = f"Updated: {self.last_update.strftime('%H:%M:%S')} UTC"
             self.update_time_label.configure(text=update_text)
 
     def _handle_refresh_error(self, error: Exception) -> None:

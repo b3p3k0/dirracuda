@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+from datetime import timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -419,3 +420,21 @@ def test_update_runtime_status_display_refreshes_webui(monkeypatch):
     dash._update_runtime_status_display()
 
     assert calls == [dash]
+
+
+def test_status_times_are_labelled_utc():
+    dash = _make_summary_dashboard()
+    dash.db_reader.get_dashboard_summary = lambda: {
+        "total_servers": 1,
+        "servers_with_accessible_shares": 0,
+        "total_shares": 0,
+        "last_scan": "2026-10-05T09:45:07+02:00",
+    }
+
+    dash.refresh_after_database_change()
+
+    assert dash.status_text.get().startswith("Last Scan: 2026-10-05 07:45 UTC | ")
+    assert dash.last_update.tzinfo is timezone.utc
+    assert dash.update_time_label.kwargs["text"] == (
+        f"Updated: {dash.last_update.strftime('%H:%M:%S')} UTC"
+    )

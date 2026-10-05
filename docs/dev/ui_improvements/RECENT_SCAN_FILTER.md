@@ -166,6 +166,6 @@ tick shows only the run's 2 of 4 hosts, `Filters (1) ▾`; restart with a fresh
 
 ## Follow-ups (not in scope)
 
-- `apply_date_filter` compares local `datetime.now()` against UTC `last_seen`,
-  so `Last 24 Hours` etc. are skewed by the local UTC offset. Existing bug.
+- Fixed 2026-10-05 (B1 in [README.md](README.md)): `apply_date_filter` used to
+  compare local `datetime.now()` against UTC `last_seen`.
 - Web UI Results has its own `Filters ▾`; it has no Most Recent Scan Only yet.
