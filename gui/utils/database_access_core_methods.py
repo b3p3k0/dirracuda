@@ -365,9 +365,8 @@ def _query_dashboard_summary(self) -> Dict[str, Any]:
         """
         recent_result = conn.execute(recent_discoveries_query).fetchone()
         
-        # Get last scan time
-        last_scan_query = "SELECT MAX(last_seen) as last_scan FROM smb_servers"
-        last_scan_result = conn.execute(last_scan_query).fetchone()
+        # Get last scan time across SMB, FTP, and HTTP hosts
+        last_scan = self._get_protocol_recent_cutoff(conn)
         
         # Get database size (approximate)
         size_query = "SELECT page_count * page_size as size FROM pragma_page_count(), pragma_page_size()"
@@ -396,7 +395,7 @@ def _query_dashboard_summary(self) -> Dict[str, Any]:
             "total_shares": result["total_shares"] or 0,
             "high_risk_vulnerabilities": result["high_risk_vulnerabilities"] or 0,
             "recent_discoveries": recent_discoveries,
-            "last_scan": last_scan_result["last_scan"] or "Never",
+            "last_scan": last_scan or "Never",
             "database_size_mb": round((size_result["size"] or 0) / (1024 * 1024), 1)
         }
 

@@ -42,6 +42,7 @@ import gui.components.dashboard_scan as ds
 from experimental.se_dork.models import (
     RunOptions,
     RunResult,
+    RUN_STATUS_CANCELLED,
     RUN_STATUS_DONE,
     RUN_STATUS_ERROR,
 )
@@ -569,6 +570,15 @@ class TestOnSearxngScanDone:
         assert "duration_seconds" in r
         assert "end_time" in r
 
+    @pytest.mark.parametrize("status", [RUN_STATUS_DONE, RUN_STATUS_CANCELLED])
+    def test_finish_refreshes_dashboard_status(self, status):
+        """Finish must unlock and refresh the status line so Last Scan updates."""
+        dash = _make_dash()
+        refreshes = []
+        dash.refresh_after_database_change = lambda **kw: refreshes.append(kw)
+        ds._on_searxng_scan_done(dash, _make_result(status=status), searxng_only=True)
+        assert refreshes == [{"refresh_runtime_status": True}]
+
     def test_mixed_run_suppresses_results_dialog(self, monkeypatch):
         """Mixed Self-hosted Search+Shodan run must not show results dialog (Shodan may still be active)."""
         dash = _make_dash()
@@ -1049,6 +1059,14 @@ class TestOnRedditScanDone:
         ds._on_reddit_scan_done(dash, result)
         assert len(errors) == 1
         assert "rate limited" in errors[0][1]
+
+    def test_success_refreshes_dashboard_status(self):
+        """Finish must unlock and refresh the status line so Last Scan updates."""
+        dash = _make_dash()
+        refreshes = []
+        dash.refresh_after_database_change = lambda **kw: refreshes.append(kw)
+        ds._on_reddit_scan_done(dash, _make_reddit_result(), reddit_only=True)
+        assert refreshes == [{"refresh_runtime_status": True}]
 
     def test_success_reddit_only_shows_scan_results(self, monkeypatch):
         dash = _make_dash()

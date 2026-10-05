@@ -904,7 +904,7 @@ def _on_reddit_scan_done(
             "duration_seconds": duration_seconds,
         }
         _call_dashboard_hook(dash, "_show_scan_results", scan_results)
-    _call_dashboard_hook(dash, "_refresh_dashboard_data")
+    _call_dashboard_hook(dash, "refresh_after_database_change", refresh_runtime_status=True)
     if queue_managed:
         from gui.components.dashboard_provider_queue import complete_provider
 

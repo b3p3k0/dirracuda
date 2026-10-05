@@ -343,7 +343,7 @@ def _on_searxng_scan_done(
             ),
         )
         _hook(dash, "_log_status_event", "Self-hosted Search search cancelled.")
-        _hook(dash, "_refresh_dashboard_data")
+        _hook(dash, "refresh_after_database_change", refresh_runtime_status=True)
         _clear_cancel_event(dash)
         return
 
@@ -392,7 +392,7 @@ def _on_searxng_scan_done(
             "duration_seconds": duration_seconds,
         }
         _hook(dash, "_show_scan_results", scan_results)
-    _hook(dash, "_refresh_dashboard_data")
+    _hook(dash, "refresh_after_database_change", refresh_runtime_status=True)
     if queue_managed:
         from gui.components.dashboard_provider_queue import complete_provider
         complete_provider(dash, "searxng", provider_generation, success=True)

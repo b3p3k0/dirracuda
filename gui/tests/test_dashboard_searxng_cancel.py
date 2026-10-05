@@ -140,7 +140,7 @@ class TestExtractionRegression:
         dash._reset_log_output = lambda *_: None
         dash._log_status_event = lambda *_: None
         dash._clear_searxng_task = lambda: None
-        dash._refresh_dashboard_data = lambda: None
+        dash.refresh_after_database_change = lambda **_: None
         dash._show_scan_results = lambda *_: None
         dash._handle_scan_log_line = lambda *_: None
 
@@ -191,7 +191,7 @@ class TestSyncCondition:
         dash._reset_log_output = lambda *_: None
         dash._log_status_event = lambda *_: None
         dash._clear_searxng_task = lambda: None
-        dash._refresh_dashboard_data = lambda: None
+        dash.refresh_after_database_change = lambda **_: None
         dash._show_scan_results = lambda *_: None
         dash._handle_scan_log_line = lambda *_: None
 
@@ -357,7 +357,7 @@ class TestEventLifecycle:
         dash._reset_log_output = lambda *_: None
         dash._log_status_event = lambda *_: None
         dash._clear_searxng_task = lambda: None
-        dash._refresh_dashboard_data = lambda: None
+        dash.refresh_after_database_change = lambda **_: None
         dash._show_scan_results = lambda *_: None
         dash._handle_scan_log_line = lambda *_: None
 
