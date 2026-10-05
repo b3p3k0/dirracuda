@@ -303,3 +303,14 @@ def test_failed_record_skips_dashboard_refresh(dash, recorder):
     assert provider_queue.cancel_provider_queue(dash)
     recorder.assert_called_once()
     dash.refresh_after_database_change.assert_not_called()
+
+
+def test_all_failed_queue_records_completed_window(dash, recorder):
+    assert provider_queue.start_provider_queue(dash, {"providers": ["reddit", "searxng"]})
+    for provider in ("reddit", "searxng"):
+        assert provider_queue.complete_provider(
+            dash, provider, dash._provider_queue_generation,
+            success=False, error="unreachable",
+        )
+    recorder.assert_called_once()
+    assert recorder.call_args.kwargs["cancelled"] is False

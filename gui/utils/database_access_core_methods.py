@@ -367,11 +367,12 @@ def _query_dashboard_summary(self) -> Dict[str, Any]:
         """
         recent_result = conn.execute(recent_discoveries_query).fetchone()
         
-        # Get last scan time: newest host last_seen, or the last desktop scan
-        # window end when later (a run that found no hosts still ran). Both UTC.
+        # Get last scan time: newest host last_seen, or the last completed
+        # desktop scan window end when later (a run that found no hosts still
+        # ran). Cancelled runs do not count. Both UTC.
         last_scan = self._get_protocol_recent_cutoff(conn)
         window = last_scan_window.load_last_scan_window(self.db_path)
-        if window:
+        if window and not window["cancelled"]:
             window_end = window["end"].strftime("%Y-%m-%d %H:%M:%S")
             if not last_scan or window_end > last_scan:
                 last_scan = window_end

@@ -62,12 +62,12 @@ def test_latest_timestamp_wins_across_protocols(db_path):
     assert _last_scan(db_path) == "2026-10-05 08:00:00"
 
 
-def _window(end):
+def _window(end, *, cancelled=False):
     return {
         "start": datetime(2026, 10, 5, 9, 0, tzinfo=timezone.utc),
         "end": end,
         "providers": ["reddit"],
-        "cancelled": False,
+        "cancelled": cancelled,
     }
 
 
@@ -86,3 +86,11 @@ def test_host_later_than_window_wins(db_path, window):
     _insert(db_path, "http_servers", "198.51.100.3", "2026-10-05 10:00:00")
     window["value"] = _window(datetime(2026, 10, 5, 9, 45, tzinfo=timezone.utc))
     assert _last_scan(db_path) == "2026-10-05 10:00:00"
+
+
+def test_cancelled_window_is_ignored(db_path, window):
+    _insert(db_path, "ftp_servers", "198.51.100.2", "2026-10-05 08:00:00")
+    window["value"] = _window(
+        datetime(2026, 10, 5, 9, 45, tzinfo=timezone.utc), cancelled=True
+    )
+    assert _last_scan(db_path) == "2026-10-05 08:00:00"

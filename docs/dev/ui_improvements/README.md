@@ -1,6 +1,20 @@
 # UI improvements
 
-## Current task: Server List Most Recent Scan Only filter
+## Completed task: dashboard Last Scan line
+
+Status: committed (`df0378d`, `ea1446b`, and the cancelled-run follow-up).
+
+The dashboard `Last Scan` line now updates after Reddit and Self-hosted Search
+runs. It shows the later of the newest active host `last_seen` (SMB, FTP, HTTP)
+and the end of the last completed desktop scan window. Decisions (HI, 2026-10-05):
+
+- A completed run that found no hosts counts.
+- A completed run where every provider failed counts: the run completed even
+  though the things it ran failed.
+- A cancelled run does not count.
+- CLI and Web UI runs count only through host `last_seen`.
+
+## Completed task: Server List Most Recent Scan Only filter
 
 Adds a `Most Recent Scan Only` option to `Filters ▾`. It shows hosts from the
 last desktop provider-queue run and removes the broken `Since Last Scan` date
@@ -110,3 +124,19 @@ Startup references: [Agent Charter](https://raw.githubusercontent.com/b3p3k0/con
 [scan dialogs](../scan_dialogs/LESSONS_LEARNED.md),
 [provider promotion](../promote_reddit_and_websearch/LESSONS_LEARNED.md), and
 [keyboard controls](../kbd_ctrl_improve/LESSONS_LEARNED.md).
+
+## Backlog
+
+### B1 — Last Scan shows UTC as if it were local time
+
+Status: not started. HI parked it on 2026-10-05.
+
+- Problem: `Last Scan` values are UTC (`CURRENT_TIMESTAMP` and the scan window
+  file). `gui/dashboard/widget.py::_update_status_display` parses the string
+  as a naive datetime and prints it unchanged, so the time is off by the local
+  UTC offset.
+- Likely fix: treat the naive value as UTC, convert to local time, then format.
+  Add a test with a fixed non-UTC offset.
+- Related: Server List `apply_date_filter` (for example `Last 24 Hours`)
+  compares local `datetime.now()` with UTC `last_seen`. See Follow-ups in
+  [RECENT_SCAN_FILTER.md](RECENT_SCAN_FILTER.md). Decide whether one card fixes both.
