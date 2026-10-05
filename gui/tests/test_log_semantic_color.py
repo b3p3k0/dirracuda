@@ -140,6 +140,17 @@ def test_log_status_event_one_arg_is_valid():
     assert not dash.log_queue.empty()
 
 
+def test_log_status_event_is_utc_and_still_colorized():
+    import queue as _queue
+    from gui.components.dashboard import DashboardWidget
+    dash = DashboardWidget.__new__(DashboardWidget)
+    dash.log_queue = _queue.Queue()
+    dash._log_status_event("SearXNG search started: https://s.example.com")
+    entry = dash.log_queue.get_nowait()
+    assert re.match(r"^\[status \d{2}:\d{2}:\d{2} UTC\] ", entry)
+    assert colorize_for_display(entry) != entry
+
+
 # ---------------------------------------------------------------------------
 # 3. SearXNG service message classification
 # ---------------------------------------------------------------------------

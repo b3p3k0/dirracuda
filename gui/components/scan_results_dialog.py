@@ -10,7 +10,7 @@ Results remain available without interrupting typing or blocking subsequent work
 import tkinter as tk
 from tkinter import ttk
 import webbrowser
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict, Any, Callable, Optional
 import sys
 import os
@@ -512,8 +512,9 @@ class ScanResultsDialog:
             return "Unknown"
         
         try:
-            end_time = datetime.fromisoformat(end_time_str)
-            return end_time.strftime("%Y-%m-%d %H:%M:%S")
+            # Naive end_time values are local time; astimezone() reads them as local.
+            end_time = datetime.fromisoformat(end_time_str).astimezone(timezone.utc)
+            return end_time.strftime("%Y-%m-%d %H:%M:%S UTC")
         except (ValueError, TypeError):
             return "Unknown"
     

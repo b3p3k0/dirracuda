@@ -889,8 +889,8 @@ class DashboardWidget:
         """Append controller-level status lines to the console output."""
         if not message:
             return
-        timestamp = datetime.now().strftime("%H:%M:%S")
-        entry = f"[status {timestamp}] {message}"
+        timestamp = datetime.now(timezone.utc).strftime("%H:%M:%S")
+        entry = f"[status {timestamp} UTC] {message}"
         try:
             self.log_queue.put(entry)
         except Exception:

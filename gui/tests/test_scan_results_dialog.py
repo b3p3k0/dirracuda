@@ -57,3 +57,18 @@ def test_reddit_wording() -> None:
     assert not dialog._is_searxng_scan()
     assert not dialog._is_ftp_scan()
     assert not dialog._is_multi_scan()
+
+
+def test_scan_time_is_shown_in_utc(monkeypatch) -> None:
+    import time
+    monkeypatch.setenv("TZ", "Etc/GMT+5")
+    time.tzset()
+    try:
+        dialog = _dialog("smb")
+        dialog.scan_results["end_time"] = "2026-10-05T09:45:07"
+        assert dialog._format_scan_time() == "2026-10-05 14:45:07 UTC"
+        dialog.scan_results["end_time"] = "2026-10-05T09:45:07+00:00"
+        assert dialog._format_scan_time() == "2026-10-05 09:45:07 UTC"
+    finally:
+        monkeypatch.undo()
+        time.tzset()

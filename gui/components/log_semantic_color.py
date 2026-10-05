@@ -22,7 +22,7 @@ LEVEL_CODES: dict[str, str] = {
     "red": "91",
 }
 
-_STATUS_PREFIX = re.compile(r"^\[status \d{2}:\d{2}:\d{2}\] ")
+_STATUS_PREFIX = re.compile(r"^\[status \d{2}:\d{2}:\d{2}(?: UTC)?\] ")
 
 # Ordered (pattern, level) — red checked before yellow before green before blue.
 # Only exact SearXNG/Reddit/provider-queue messages are matched; everything else

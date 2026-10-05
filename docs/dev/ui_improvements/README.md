@@ -136,5 +136,24 @@ Status: done 2026-10-05. HI chose UTC everywhere over local conversion.
 - Server List `apply_date_filter` (`Last 24 Hours` and so on) now compares
   in UTC. Before, it compared local `now` with UTC `last_seen`, and an
   offset-aware value (`...Z`) raised `TypeError`.
-- Not changed: Live Scan Output `[status HH:MM:SS]` lines and CLI log lines
-  still use local time.
+- Live Scan Output `[status HH:MM:SS UTC]` lines and the Scan Results
+  `Completed` time now show UTC too. The log colouring regex accepts the
+  ` UTC` suffix. CLI output lines carry no timestamps. Stored `end_time`
+  values stay local because the scan cohort queries use them; only the
+  display converts.
+
+### B2 — Dashboard `DB:` counts are SMB-only
+
+Status: not started. HI queued it as the next card on 2026-10-05.
+
+- Problem: the status line reads `DB: N servers, N with accessible shares,
+  N total shares`. `_query_dashboard_summary` in
+  `gui/utils/database_access_core_methods.py` counts only `smb_servers` and
+  `share_access`. FTP and HTTP hosts never appear. Seen under Xvfb: one HTTP
+  host, `DB: 0 servers`.
+- `total_servers` and `accessible_shares` also feed
+  `gui/components/database_setup_dialog.py` ("SMB servers:" wording), so
+  changing the keys' meaning affects that dialog.
+- To decide: wording and breakdown. For example `DB: 12 hosts (SMB 8 · FTP 3 ·
+  HTTP 1)`, or keep `servers` and sum all protocols. What "accessible" means
+  for FTP (`ftp_access.accessible`) and HTTP (`http_access`) needs a check.
