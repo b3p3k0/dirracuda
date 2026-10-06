@@ -364,7 +364,8 @@ def _open_keymaster(owner: Any) -> None:
     """Open the modeless Keymaster window; do not wait on it.
 
     Keymaster writes shodan.api_key to config directly (no new grab_set/Toplevel
-    here); the dialog's FocusIn reconcile picks the new key up without reopening.
+    here); the dialog's FocusIn status refresh flips the sentinel token to
+    "<CONFIGURED>" without reopening. The real key never reaches the field.
     """
     from gui.components.keymaster_window import show_keymaster_window
 
@@ -373,24 +374,6 @@ def _open_keymaster(owner: Any) -> None:
         settings_manager=owner._settings_manager,
         config_path=str(owner.config_path),
     )
-
-
-def _toggle_shodan_key_reveal(entry: ttk.Entry, button: ttk.Button) -> None:
-    """Flip the masked key entry between hidden and visible.
-
-    Reveal state is transient/UI-only and is never persisted. Empty ``show``
-    means visible; the bullet masks it again.
-    """
-    try:
-        revealed = str(entry.cget("show")) == ""
-    except tk.TclError:
-        return
-    if revealed:
-        entry.configure(show="•")
-        button.configure(text="Show")
-    else:
-        entry.configure(show="")
-        button.configure(text="Hide")
 
 
 def _build_shodan_options(owner: Any, parent: tk.Widget) -> tk.Frame:
@@ -402,11 +385,17 @@ def _build_shodan_options(owner: Any, parent: tk.Widget) -> tk.Frame:
     owner.theme.apply_to_widget(frame, "main_window")
     frame.grid_columnconfigure(2, weight=1)
 
-    # Shared masked API-key row (Card 4) — one per account, spans the panel width.
-    # It lives inside the Shodan frame, so the provider-level _apply_state_recursive
-    # greys it when Shodan is OFF. The per-protocol grey-out
-    # (sync_shodan_protocol_states) only iterates _shodan_protocol_rows, so it never
-    # touches this row — correct, the key is shared across protocols.
+    # Shared API-key row (Card 6, Design B) — one per account, spans the panel
+    # width. It is BOTH a non-secret status indicator and an optional per-run
+    # override box; it NEVER displays the stored key and has no reveal control.
+    # In sentinel mode the field is plaintext (show="") and holds a status token;
+    # focusing it switches to a masked (show="*") override edit. It lives inside
+    # the Shodan frame, so the provider-level _apply_state_recursive greys it when
+    # Shodan is OFF. The per-protocol grey-out (sync_shodan_protocol_states) only
+    # iterates _shodan_protocol_rows, so it never touches this row — correct, the
+    # key is shared across protocols.
+    from gui.components.unified_scan_dialog import API_KEY_CONFIGURED, API_KEY_NOT_SET
+
     key_row = tk.Frame(frame)
     owner.theme.apply_to_widget(key_row, "main_window")
     key_row.grid(row=0, column=0, columnspan=3, sticky="ew", pady=(0, 2))
@@ -416,15 +405,17 @@ def _build_shodan_options(owner: Any, parent: tk.Widget) -> tk.Frame:
         command=lambda: _open_keymaster(owner),
     )
     keymaster_button.pack(side=tk.RIGHT, padx=(6, 0))
-    key_entry = ttk.Entry(key_row, textvariable=owner.shodan_api_key_var, show="•")
-    reveal_button = ttk.Button(
-        key_row, text="Show", width=6, padding=(4, 0),
-        command=lambda: _toggle_shodan_key_reveal(key_entry, reveal_button),
+    # Plaintext while the field holds a sentinel status token; masked otherwise.
+    sentinel = owner.shodan_api_key_var.get() in (API_KEY_CONFIGURED, API_KEY_NOT_SET)
+    key_entry = ttk.Entry(
+        key_row,
+        textvariable=owner.shodan_api_key_var,
+        show="" if sentinel else "*",
     )
-    reveal_button.pack(side=tk.RIGHT, padx=(6, 0))
     key_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
+    key_entry.bind("<FocusIn>", lambda _e: owner._on_shodan_key_focus_in(key_entry))
+    key_entry.bind("<FocusOut>", lambda _e: owner._on_shodan_key_focus_out(key_entry))
     frame._shodan_api_key_entry = key_entry
-    frame._shodan_api_key_reveal_button = reveal_button
 
     _muted_label(owner, frame, "Max").grid(row=1, column=1, sticky="w", padx=(0, 8))
     _muted_label(owner, frame, "Shodan query").grid(row=1, column=2, sticky="w")

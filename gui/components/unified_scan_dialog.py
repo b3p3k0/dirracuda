@@ -39,6 +39,13 @@ _MAX_COUNTRIES = 100
 _CONCURRENCY_UPPER = 256
 _TIMEOUT_UPPER = 300
 
+# Card 6 (Design B) — the shared Shodan API-key field is a sentinel STATUS
+# indicator by default and never displays the stored key. These non-secret
+# tokens are the only text the field ever holds in sentinel mode; they are the
+# single source of truth shared across the dialog, layout, and tests.
+API_KEY_CONFIGURED = "<CONFIGURED>"
+API_KEY_NOT_SET = "<not set>"
+
 
 class UnifiedScanDialog:
     """Single-instance, non-blocking dialog for queued multi-protocol scan runs."""
@@ -134,12 +141,13 @@ class UnifiedScanDialog:
         self.ftp_shodan_query_var = tk.StringVar(value="")
         self.http_shodan_query_var = tk.StringVar(value="")
 
-        # Shared Shodan API key (Card 4; one per account, masked by default).
-        # Prefilled from saved config via the non-raising accessor; never logged.
-        # The baseline drives FocusIn reconcile so a Keymaster Apply shows up
-        # without reopening the dialog.
+        # Shared Shodan API-key field (Card 6, Design B). This field NEVER shows
+        # the stored key. By default it is a sentinel STATUS indicator holding a
+        # non-secret token ("<CONFIGURED>" / "<not set>"); typing switches it to a
+        # masked one-off override box. _load_initial_values seeds the token from
+        # config presence and sets the flag. There is no reveal control.
         self.shodan_api_key_var = tk.StringVar(value="")
-        self._shodan_api_key_default = ""
+        self._shodan_api_key_sentinel_active = True
 
         # Template UI state
         self.template_var = tk.StringVar()
@@ -309,16 +317,12 @@ class UnifiedScanDialog:
         except Exception:
             pass
 
-        # Static prefill of the shared Shodan API key from saved config (Card 4).
-        # Uses the non-raising safe accessor (NOT get_shodan_api_key, which RAISES
-        # when empty); the key is never logged. Baseline drives FocusIn reconcile.
-        try:
-            from shared.config import SMBSeekConfig
-            _api_key = SMBSeekConfig(str(self.config_path)).get("shodan", "api_key", "") or ""
-            self.shodan_api_key_var.set(_api_key)
-            self._shodan_api_key_default = _api_key
-        except Exception:
-            pass
+        # Card 6 (Design B): seed the shared Shodan API-key field with a non-secret
+        # STATUS token derived from config presence ("<CONFIGURED>" vs "<not set>").
+        # The stored key is NEVER read into the field; the old real-key prefill was
+        # removed. Typing later switches the field into a masked override box.
+        self._shodan_api_key_sentinel_active = True
+        self.shodan_api_key_var.set(self._shodan_sentinel_token())
 
         # Wire trace callbacks so estimates refresh live as values are typed
         for _v in (self.smb_max_results_var, self.ftp_max_results_var, self.http_max_results_var):
@@ -655,29 +659,66 @@ class UnifiedScanDialog:
         self._refresh_protocol_estimate_lines()
         sync_shodan_protocol_states(getattr(self, "_shodan_opts_frame", None))
 
-    def _refresh_shodan_api_key_field(self) -> None:
-        """Reconcile the inline Shodan API key with the stored value.
+    def _shodan_sentinel_token(self) -> str:
+        """Return the non-secret STATUS token for the API-key field.
 
-        Keymaster is modeless and writes ``shodan.api_key`` to config directly;
-        it does NOT fire ``<<DorkbookApplied>>``. So this runs on dialog FocusIn
-        with reconcile semantics: an in-progress edit is preserved; an untouched
-        field snaps to the latest stored key. The key is never logged. Uses the
-        non-raising safe accessor; a transient read failure keeps the field.
+        ``<CONFIGURED>`` when a non-empty ``shodan.api_key`` exists in config,
+        else ``<not set>``. Uses the non-raising safe accessor (NOT
+        ``get_shodan_api_key()``, which RAISES when empty); a read failure is
+        treated as "not set". This NEVER returns or exposes the stored key.
         """
         try:
             from shared.config import SMBSeekConfig
-            latest = SMBSeekConfig(str(self.config_path)).get("shodan", "api_key", "") or ""
+            has_key = bool(SMBSeekConfig(str(self.config_path)).get("shodan", "api_key", ""))
         except Exception:
+            has_key = False
+        return API_KEY_CONFIGURED if has_key else API_KEY_NOT_SET
+
+    def _on_shodan_key_focus_in(self, entry: Any) -> None:
+        """Enter EDIT mode: clear the status token and mask for a one-off override.
+
+        Only fires the transition while the field is still a sentinel token; once
+        the user is editing we leave their in-progress value alone.
+        """
+        if not getattr(self, "_shodan_api_key_sentinel_active", True):
             return
-        from experimental.dorkbook.defaults import reconcile_query
-        self.shodan_api_key_var.set(
-            reconcile_query(
-                self.shodan_api_key_var.get(),
-                self._shodan_api_key_default,
-                latest,
-            )
-        )
-        self._shodan_api_key_default = latest
+        self._shodan_api_key_sentinel_active = False
+        self.shodan_api_key_var.set("")
+        try:
+            entry.configure(show="*")
+        except tk.TclError:
+            pass
+
+    def _on_shodan_key_focus_out(self, entry: Any) -> None:
+        """Leaving EDIT mode empty reverts to the sentinel token; a typed value stays.
+
+        A non-blank value remains a masked per-run override. An empty/whitespace
+        value recomputes the non-secret status token (plaintext). The stored key
+        is never read into the field here.
+        """
+        if getattr(self, "_shodan_api_key_sentinel_active", True):
+            return
+        if self.shodan_api_key_var.get().strip():
+            return
+        self._shodan_api_key_sentinel_active = True
+        self.shodan_api_key_var.set(self._shodan_sentinel_token())
+        try:
+            entry.configure(show="")
+        except tk.TclError:
+            pass
+
+    def _refresh_shodan_api_key_field(self) -> None:
+        """Refresh the sentinel STATUS token after a modeless Keymaster Apply.
+
+        Keymaster is modeless and writes ``shodan.api_key`` to config directly.
+        On dialog FocusIn we recompute the non-secret token so ``<not set>`` flips
+        to ``<CONFIGURED>`` once a key is added. This NEVER reads or places the
+        stored key into the field. If the user has a typed override in progress
+        (sentinel inactive), the edit is left untouched.
+        """
+        if not getattr(self, "_shodan_api_key_sentinel_active", True):
+            return
+        self.shodan_api_key_var.set(self._shodan_sentinel_token())
 
     def _bind_shodan_api_key_refresh(self) -> None:
         """Refresh the inline API key on dialog FocusIn (credential logic stays here)."""
@@ -1056,12 +1097,21 @@ class UnifiedScanDialog:
             protocols = self._resolve_selected_protocols()
             if not protocols:
                 raise ValueError("Select at least one protocol (SMB, FTP, or HTTP).")
-            # Shared inline API key (Card 4). Blank => leave api_key_override unset
-            # so the existing gate prompts/uses config exactly as today. Non-blank
-            # => run-scoped override; the gate handles first-time persistence and
-            # never overwrites a stored key. No length validation; never logged.
+            # Shared API-key field (Card 6, Design B). Only a REAL typed override
+            # becomes api_key_override: the field must be in EDIT mode (sentinel
+            # inactive) AND hold a non-blank value that is not a status token.
+            # Otherwise leave api_key_override unset so the unchanged gate uses the
+            # saved/Keymaster key exactly as today. getattr default True means stub
+            # harnesses that never set the flag correctly yield NO override. Never
+            # logged; the stored key never reaches this path.
             _key_var = getattr(self, "shodan_api_key_var", None)
-            shodan_api_key_override = str(_key_var.get() if _key_var else "").strip()
+            _raw_key = str(_key_var.get() if _key_var else "").strip()
+            if (
+                not getattr(self, "_shodan_api_key_sentinel_active", True)
+                and _raw_key
+                and _raw_key not in (API_KEY_CONFIGURED, API_KEY_NOT_SET)
+            ):
+                shodan_api_key_override = _raw_key
             _shodan_query_vars = {
                 "smb": getattr(self, "smb_shodan_query_var", None),
                 "ftp": getattr(self, "ftp_shodan_query_var", None),
