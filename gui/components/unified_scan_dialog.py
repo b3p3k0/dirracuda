@@ -47,6 +47,26 @@ API_KEY_CONFIGURED = "<CONFIGURED>"
 API_KEY_NOT_SET = "<not set>"
 
 
+def _shodan_key_hint(key: str) -> str:
+    """First-4-char identifier for a stored key, mirroring Keymaster's threshold.
+
+    Returns ``key[:4]`` ONLY when ``len(key) > 8`` (so short keys reveal
+    nothing); otherwise "". Never returns more than 4 chars and never the tail.
+    """
+    k = str(key or "")
+    return k[:4] if len(k) > 8 else ""
+
+
+def _is_shodan_sentinel_text(s: str) -> bool:
+    """True when ``s`` is a (possibly hinted) status token, never a real key.
+
+    The displayed CONFIGURED token is now dynamic (``<CONFIGURED> | AbCD…``), so
+    sentinel detection is prefix-based rather than exact-equality against the two
+    constants. A hinted token must never be mistaken for a typed override.
+    """
+    return s == API_KEY_NOT_SET or s.startswith(API_KEY_CONFIGURED)
+
+
 class UnifiedScanDialog:
     """Single-instance, non-blocking dialog for queued multi-protocol scan runs."""
 
@@ -662,17 +682,25 @@ class UnifiedScanDialog:
     def _shodan_sentinel_token(self) -> str:
         """Return the non-secret STATUS token for the API-key field.
 
-        ``<CONFIGURED>`` when a non-empty ``shodan.api_key`` exists in config,
-        else ``<not set>``. Uses the non-raising safe accessor (NOT
-        ``get_shodan_api_key()``, which RAISES when empty); a read failure is
-        treated as "not set". This NEVER returns or exposes the stored key.
+        ``<not set>`` when no non-empty ``shodan.api_key`` exists in config.
+        When a key exists, ``<CONFIGURED>`` — plus a ``| AbCD…`` identifier that
+        shows ONLY the first 4 chars, and ONLY when len(key) > 8 (mirrors
+        Keymaster's threshold; a short key shows no prefix). Uses the non-raising
+        safe accessor (NOT ``get_shodan_api_key()``, which RAISES when empty); a
+        read failure is treated as "not set". The stored key NEVER leaves this
+        function — at most its first 4 chars reach the returned token.
         """
         try:
             from shared.config import SMBSeekConfig
-            has_key = bool(SMBSeekConfig(str(self.config_path)).get("shodan", "api_key", ""))
+            key = str(SMBSeekConfig(str(self.config_path)).get("shodan", "api_key", "") or "")
         except Exception:
-            has_key = False
-        return API_KEY_CONFIGURED if has_key else API_KEY_NOT_SET
+            key = ""
+        if not key:
+            return API_KEY_NOT_SET
+        hint = _shodan_key_hint(key)
+        if hint:
+            return f"{API_KEY_CONFIGURED} | {hint}…"
+        return API_KEY_CONFIGURED
 
     def _on_shodan_key_focus_in(self, entry: Any) -> None:
         """Enter EDIT mode: clear the status token and mask for a one-off override.
@@ -1109,7 +1137,7 @@ class UnifiedScanDialog:
             if (
                 not getattr(self, "_shodan_api_key_sentinel_active", True)
                 and _raw_key
-                and _raw_key not in (API_KEY_CONFIGURED, API_KEY_NOT_SET)
+                and not _is_shodan_sentinel_text(_raw_key)
             ):
                 shodan_api_key_override = _raw_key
             _shodan_query_vars = {

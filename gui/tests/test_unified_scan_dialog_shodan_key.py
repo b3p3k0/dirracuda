@@ -159,17 +159,36 @@ def _destroy(root, dialog) -> None:
 # 1 — Sentinel status token on open; the stored key never enters the field
 # ---------------------------------------------------------------------------
 
-def test_open_with_key_shows_configured_sentinel_not_the_key(monkeypatch, tmp_path):
+def test_open_with_long_key_shows_hinted_sentinel_not_the_key(monkeypatch, tmp_path):
+    # len > 8 -> the token carries a first-4-char identifier (Keymaster's rule).
     root, dialog = _build_dialog(
-        monkeypatch, tmp_path, extra_config={"shodan": {"api_key": "CONFIG_KEY"}}
+        monkeypatch, tmp_path, extra_config={"shodan": {"api_key": "AbCDef1234567890"}}
+    )
+    try:
+        value = dialog.shodan_api_key_var.get()
+        assert value == "<CONFIGURED> | AbCD…"
+        assert value.startswith(API_KEY_CONFIGURED)
+        # ONLY the first 4 chars reach the display: the remainder and the full
+        # key are absent anywhere in the field/var.
+        assert "ef1234567890" not in value
+        assert "AbCDef1234567890" not in value
+        entry_text = dialog._shodan_opts_frame._shodan_api_key_entry.get()
+        assert entry_text == "<CONFIGURED> | AbCD…"
+        assert "ef1234567890" not in entry_text
+        assert dialog._shodan_api_key_sentinel_active is True
+    finally:
+        _destroy(root, dialog)
+
+
+def test_open_with_short_key_shows_bare_configured_sentinel(monkeypatch, tmp_path):
+    # len <= 8 -> NO hint prefix at all; none of the key chars are revealed.
+    root, dialog = _build_dialog(
+        monkeypatch, tmp_path, extra_config={"shodan": {"api_key": "abc12"}}
     )
     try:
         value = dialog.shodan_api_key_var.get()
         assert value == API_KEY_CONFIGURED
-        # The real key value is NOT present anywhere in the field/var.
-        assert "CONFIG_KEY" not in value
         assert dialog._shodan_opts_frame._shodan_api_key_entry.get() == API_KEY_CONFIGURED
-        assert "CONFIG_KEY" not in dialog._shodan_opts_frame._shodan_api_key_entry.get()
         assert dialog._shodan_api_key_sentinel_active is True
     finally:
         _destroy(root, dialog)
@@ -257,6 +276,21 @@ def test_sentinel_token_value_in_edit_mode_omits_override(monkeypatch, tmp_path)
     assert "api_key_override" not in request
 
 
+def test_hinted_sentinel_token_in_edit_mode_omits_override(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        "gui.components.unified_scan_dialog.persist_query_budget_state", lambda *_a, **_k: None
+    )
+    dlg = _make_request_dialog(tmp_path)
+    dlg._shodan_api_key_sentinel_active = False
+    # A hinted CONFIGURED token (<CONFIGURED> | AbCD…) is still a status token;
+    # the defensive _is_shodan_sentinel_text prefix check must reject it.
+    dlg.shodan_api_key_var.set("<CONFIGURED> | AbCD…")
+
+    request = dlg._build_scan_request()
+
+    assert "api_key_override" not in request
+
+
 def test_blank_value_in_edit_mode_omits_override(monkeypatch, tmp_path):
     monkeypatch.setattr(
         "gui.components.unified_scan_dialog.persist_query_budget_state", lambda *_a, **_k: None
@@ -323,15 +357,19 @@ def _make_refresh_dialog(tmp_path: Path, stored_key: str | None, *, field: str, 
     return dlg, cfg
 
 
-def test_refresh_flips_not_set_to_configured_without_exposing_key(tmp_path):
-    # Start with no key -> "<not set>", sentinel active. Keymaster writes a key.
+def test_refresh_flips_not_set_to_hinted_configured_without_exposing_key(tmp_path):
+    # Start with no key -> "<not set>", sentinel active. Keymaster writes a long key.
     dlg, cfg = _make_refresh_dialog(tmp_path, None, field=API_KEY_NOT_SET, sentinel=True)
-    cfg.write_text(json.dumps({"shodan": {"api_key": "APPLIED"}}), encoding="utf-8")
+    cfg.write_text(json.dumps({"shodan": {"api_key": "AbCDef1234567890"}}), encoding="utf-8")
 
     dlg._refresh_shodan_api_key_field()
 
-    assert dlg.shodan_api_key_var.get() == API_KEY_CONFIGURED
-    assert "APPLIED" not in dlg.shodan_api_key_var.get()
+    token = dlg.shodan_api_key_var.get()
+    assert token == "<CONFIGURED> | AbCD…"
+    assert token.startswith(API_KEY_CONFIGURED)
+    # Only the first 4 chars surface; the remainder of the key never does.
+    assert "ef1234567890" not in token
+    assert "AbCDef1234567890" not in token
     assert dlg._shodan_api_key_sentinel_active is True
 
 

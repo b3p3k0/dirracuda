@@ -394,8 +394,6 @@ def _build_shodan_options(owner: Any, parent: tk.Widget) -> tk.Frame:
     # Shodan is OFF. The per-protocol grey-out (sync_shodan_protocol_states) only
     # iterates _shodan_protocol_rows, so it never touches this row — correct, the
     # key is shared across protocols.
-    from gui.components.unified_scan_dialog import API_KEY_CONFIGURED, API_KEY_NOT_SET
-
     key_row = tk.Frame(frame)
     owner.theme.apply_to_widget(key_row, "main_window")
     key_row.grid(row=0, column=0, columnspan=3, sticky="ew", pady=(0, 2))
@@ -406,7 +404,9 @@ def _build_shodan_options(owner: Any, parent: tk.Widget) -> tk.Frame:
     )
     keymaster_button.pack(side=tk.RIGHT, padx=(6, 0))
     # Plaintext while the field holds a sentinel status token; masked otherwise.
-    sentinel = owner.shodan_api_key_var.get() in (API_KEY_CONFIGURED, API_KEY_NOT_SET)
+    # The CONFIGURED token can now carry a first-4-char hint (``<CONFIGURED> |
+    # AbCD…``), so trust the sentinel flag rather than matching the dynamic text.
+    sentinel = getattr(owner, "_shodan_api_key_sentinel_active", True)
     key_entry = ttk.Entry(
         key_row,
         textvariable=owner.shodan_api_key_var,
