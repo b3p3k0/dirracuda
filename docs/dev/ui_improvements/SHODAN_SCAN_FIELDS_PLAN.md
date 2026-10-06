@@ -1,10 +1,11 @@
 # Start Scan — Shodan provider field parity — Implementation Plan
 
 **Role:** PA (Planning). **Track:** Full process (credential surface + multiple
-modules). **Status:** IMPLEMENTED — HI approved; all four cards built, reviewed
-(Card 4 credential surface passed an independent security review), and committed
-on `development` (not pushed). Ready for HI testing. See §RA Closeout at the
-bottom. Original planning note follows.
+modules). **Status:** IMPLEMENTED (incl. Card 6 redesign) — HI approved; built,
+reviewed (the credential surface passed two independent security reviews, incl.
+the Card 6 fix for a reveal bypass HI found in testing), and committed on
+`development` (not pushed). Ready for HI re-test. See §RA Closeout at the bottom.
+Original planning note follows.
 
 Approval gated implementation, not the PA write. DA implemented one card at a
 time; RA (a different session than each DA) reviewed and owned the acceptance
@@ -362,16 +363,21 @@ Per-card (Shodan always mocked — never hit the network):
 Guardrail suites that must stay green (touch GUI conventions): messagebox and
 theme-style guardrails run as part of the full suite.
 
-**Manual (HI), via the only entrypoint `./dirracuda`):**
-1. Open **Start New Scan**; select Shodan. Confirm the masked key row (prefilled
-   if a key is stored), reveal toggle, `Keymaster…`, and the per-protocol
+**Manual (HI), via the only entrypoint `./dirracuda`):** (API-key row is Design B
+after Card 6 — a sentinel status field, no reveal; the stored key is never shown.)
+1. Open **Start New Scan**; select Shodan. Confirm the **API key** row shows a
+   status token (`<CONFIGURED>` if a key is stored, else `<not set>`) and a
+   `Keymaster…` button — **no Show/reveal control** — plus the per-protocol
    `Max | Query` grid with saved dorks prefilled.
 2. Uncheck HTTP → its Max+Query grey out (stay visible); re-check → re-enable.
 3. Edit the SMB query, open Dorkbook, refresh/focus back → edit survives. Apply a
    Dorkbook SMB dork → the SMB row updates to the applied value.
-4. With a key already stored, edit the inline key, run a (mocked) scan → scan uses
-   the edited key run-scoped; reopen App Config → stored `shodan.api_key`
-   unchanged. With no key stored, enter one, launch → it is saved (gate).
+4. **API key (Design B):** the field never shows your stored key. Click it → it
+   clears to a masked (`*`) override box; type a one-off key and run a (mocked)
+   scan → the run uses the typed key and `shodan.api_key` in config is unchanged.
+   Leave the field as `<CONFIGURED>` (don't type) → the scan uses your saved
+   key. With no key, add one via `Keymaster…`, focus back → the token flips
+   `<not set>` → `<CONFIGURED>` without ever displaying the key.
 5. Blank a selected protocol's query → Start Scan is rejected with a clear message.
 
 ---
@@ -424,8 +430,9 @@ All four cards implemented by DA sessions, each independently reviewed by RA
 | 1 | `899ce7e` | scan_manager: run-scoped per-protocol `base_query` overrides (SMB/FTP/HTTP), mirroring the `max_results` block; new override test. |
 | 2 | `166ed13` | Shodan panel restructured to the vertical `checkbox \| Max \| Query` grid + per-protocol grey-out; static query prefill; `DEFAULT_GEOMETRY` 720→800. |
 | 3 | `461a256` | Query reconcile (mirror Self-hosted; `shodan:<PROTO>` destinations), validation (required-when-selected + ≤500), request wiring + `build_protocol_scan_options` propagation. |
-| 4 | `cb7f0d1` | Shared masked API-key row (Elevated-Risk): `show="•"` + reveal toggle + Keymaster button; non-raising prefill; `api_key_override` run-scoped via the **unchanged** gate; FocusIn reconcile; `DEFAULT_GEOMETRY` 800→824. |
+| 4 | `cb7f0d1` | Shared masked API-key row (Elevated-Risk): `show="•"` + reveal toggle + Keymaster button; non-raising prefill; `api_key_override` run-scoped via the **unchanged** gate; FocusIn reconcile; `DEFAULT_GEOMETRY` 800→824. **(Reveal behavior superseded by Card 6.)** |
 | fix | `b125386` | Test-harness follow-up to Card 3: the full-suite run caught `test_unified_scan_dialog_searxng_controls.py`'s own `_make_dialog` missing the query vars; set them non-blank (test-only). |
+| 6 | `a81c89f` | **HI testing finding → redesign (Elevated-Risk).** Card 4's `Show` toggle revealed the stored key in plaintext without the Keymaster passphrase. HI chose **Design B**: the API-key field is a non-secret sentinel status token (`<CONFIGURED>`/`<not set>`), **no reveal control**; focusing it gives a masked one-off override box. The stored key is never read into the field (only a boolean presence check). Independent security re-check (separate session): **SHIP, bypass closed**. |
 
 **Open questions — resolved and implemented as recommended:** Q1 run-scoped via
 the existing gate (no new secret-writing code; first-time entry persists, later
@@ -448,9 +455,12 @@ Scan geometry-restore test (`test_start_scan_remembers_dragged_position_on_reope
 files, so the broader full-suite failures (missing `pydantic`/`openai`; webui
 sandbox) are out of scope. Guardrails (messagebox, theme-style) green.
 
-**Optional future polish (non-blocking, from the security review):** re-mask the
-key entry (`show="•"`) when the Shodan provider is toggled OFF — today a revealed
-key stays visible-but-greyed until reopen. Never persisted/logged; low severity.
+**Security finding during HI testing (resolved):** Card 4's `Show`/reveal toggle
+let the stored key be viewed in plaintext without the Keymaster passphrase.
+Card 6 (`a81c89f`) removes the reveal entirely and redesigns the field so the
+stored key is never displayed (Design B, chosen by HI); an independent security
+re-check confirmed the bypass is closed. The earlier "re-mask on provider-off"
+polish is now moot — there is no reveal control at all.
 
 **Ready for HI testing** via `./dirracuda` using the Manual steps in §Validation
 above. HI still owns the push of all `development` commits.

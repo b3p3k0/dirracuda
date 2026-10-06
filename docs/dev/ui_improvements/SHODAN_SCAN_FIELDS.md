@@ -7,7 +7,11 @@ decision record; the open questions below were resolved in the plan (Q1
 run-scoped via the existing gate; Q2 mirror Self-hosted reconcile; Q3
 required-when-selected + a 500-char run-local cap). All code references here
 were verified against the repo before implementation (running code outranks
-this document).
+this document). **Superseded by implementation:** Decision 1's "reveal toggle"
+was removed during HI testing — it exposed the stored key without the Keymaster
+passphrase. The shipped API-key field is a non-secret sentinel status
+(`<CONFIGURED>`/`<not set>`) with an optional masked one-off override and no
+reveal (see the plan's §RA Closeout, Card 6).
 
 ## Problem
 
