@@ -278,7 +278,7 @@ RSS does not expose the old JSON cursor, so each run makes one anonymous feed re
 User/author mode is unavailable in anonymous RSS mode. Historical rows from older user-mode runs remain viewable in existing databases.
 
 Shared scan option:
-- **Run bulk probe after each scan** — optional explicit probe pass for concrete HTTP/HTTPS/FTP targets found during that ingest run. Start Scan opens **Configure Bulk Probe** first, as for Self-hosted Search. Unknown-protocol rows are skipped with a clear notice instead of guessing a protocol. Probe summaries and snapshots are carried into the primary DB automatically.
+- **Run bulk probe after each scan** — optional explicit probe pass for concrete HTTP/HTTPS/FTP targets found during that ingest run. Start Scan opens **Configure Bulk Probe** first, as for Self-hosted Search. Unknown-protocol rows are skipped with a clear notice instead of guessing a protocol. Probe summaries and snapshots are carried into the primary DB automatically. Live Scan Output reports probe progress (`Probing n/m targets …`), and the pass is cancellable. To keep a run bounded, the probe pass covers at most 50 targets and 180 seconds; any targets beyond those limits are reported as `skipped` in the summary.
 
 Successful standalone Reddit runs keep the existing result popup and also append a
 Shodan-style completion rollup to Live Scan Output. Multi-provider Start Scan runs
@@ -300,7 +300,7 @@ Known limitations:
 - Reddit RSS feeds are unofficial and may change without notice
 - Data availability is limited and not a complete historical archive
 - RSS has reduced metadata compared with the discontinued JSON listing endpoint; NSFW filtering is best-effort
-- Rate limiting may interrupt runs (HTTP 429 aborts the current run)
+- Rate limiting may interrupt runs: an HTTP 429 ends the current run and reports a clear "Reddit rate-limited — wait ~30–60s and try again" notice; space `new`/`top` runs apart to avoid it
 - Some posts contain no usable targets
 - Data quality depends entirely on user-submitted content
 

@@ -1,7 +1,8 @@
 # Reddit ingest — probe observability & safety plan
 
 Role: PA (Planning Agent). Branch: `development`. Date: 2026-10-06.
-Status: plan, pre-implementation. HI reviews this file; approval gates the DA cards.
+Status: **IMPLEMENTED 2026-10-06** (cards A–D). See "Implementation closeout" at end.
+Original status: plan, pre-implementation. HI reviews this file; approval gates the DA cards.
 
 ## Background (why this plan exists)
 
@@ -228,3 +229,36 @@ A-1a) is **deferred** to a separate plan.
 2. Confirm sequence A → B → C → D and that each lands as its own card/patch.
 3. DA assignment: fast-lane (one agent wears DA+RA, stated) for A/B/D, or
    full-process with RA separate from DA? (Charter: RA must differ from DA.)
+
+## Implementation closeout (2026-10-06)
+
+HI decisions resolved: Card C defaults accepted (50 / 180); sequence A→B→C→D
+confirmed; DA delegated to the local **Codex CLI** (`codex exec`, model
+`gpt-6.1-sol`) with **Claude as RA** — each card's diff was reviewed and its
+validation re-run by Claude before the commit (genuine RA≠DA separation).
+
+Commits on `development` (each a `wip:` checkpoint):
+
+| Card | Commit | Summary |
+|------|--------|---------|
+| A | `570a09d` | `progress_cb` threaded through run_ingest → finalize → probe loop; GUI live `Probing n/m` line |
+| B | `ef2d309` | `cancel_event` threaded + wired into probe engine; GUI event lifecycle + provider-queue reddit branch |
+| C | `3d1276a` | `PROBE_PASS_MAX_TARGETS=50` / `PROBE_PASS_DEADLINE_SECONDS=180`; cap + monotonic deadline via unified `effective_cancel`; `skipped` surfaced |
+| D | `0c93974` | `rate_limited` → actionable `showwarning` instead of cryptic "failed: HTTP 429" |
+
+Validation: each card validated individually (RA re-ran the plan's commands);
+final regression gate across all reddit + probe + reddit-GUI suites — **440 passed**.
+
+Deviations / decisions recorded:
+- **Reddit-only Live Scan Output cancel (Card B):** left as a follow-up gap —
+  no clean hook exists to cancel an in-flight *reddit-only* (non-queue) run from
+  the output dialog (closing it only hides the window; `_cancel_scan` governs
+  pre-launch options). The multi-provider-queue cancel path **is** wired
+  (`cancel_provider_queue` reddit branch), and Card C's 180s deadline backstops
+  the reddit-only case. A dedicated Stop control for the running Reddit output
+  dialog is a small future card if desired.
+- **Settings-UI override for the budget (Card C):** intentionally out of scope.
+  The ceilings live on `IngestOptions` (overridable programmatically) and default
+  via the module constants; a settings-UI surface can be a later card.
+- **Rate-limit retry/backoff (A-1a):** remains deferred (Elevated Risk). Only the
+  message (A-1b, Card D) shipped.
