@@ -1,9 +1,14 @@
 # Start Scan — Shodan provider field parity — Implementation Plan
 
 **Role:** PA (Planning). **Track:** Full process (credential surface + multiple
-modules). **Status:** Plan for HI approval. Approval gates implementation, not
-this write. DA implements one card at a time; RA (a different session/vendor than
-DA) reviews. Running code outranks any doc — line numbers below were verified
+modules). **Status:** IMPLEMENTED — HI approved; all four cards built, reviewed
+(Card 4 credential surface passed an independent security review), and committed
+on `development` (not pushed). Ready for HI testing. See §RA Closeout at the
+bottom. Original planning note follows.
+
+Approval gated implementation, not the PA write. DA implemented one card at a
+time; RA (a different session than each DA) reviewed and owned the acceptance
+commits. Running code outranks any doc — line numbers below were verified
 against the repo on 2026-10-06 (see §Grounding).
 
 Authoritative intent: [SHODAN_SCAN_FIELDS.md](SHODAN_SCAN_FIELDS.md) (HI decision
@@ -405,3 +410,47 @@ so the run-local cap is new; (e) no scan_manager override test exists today
 (Card 1 adds it). The override ctx mgr takes **nested dicts**, not dotted keys;
 the **`max_results`** block (not `api_key`) is the correct template for
 per-protocol `base_query`.
+
+---
+
+## RA Closeout (2026-10-06)
+
+All four cards implemented by DA sessions, each independently reviewed by RA
+(diff read + RA re-run of the named tests, not DA's word), committed on
+`development`. **Not pushed — push reserved to HI.**
+
+| Card | Commit | What landed |
+|---|---|---|
+| 1 | `899ce7e` | scan_manager: run-scoped per-protocol `base_query` overrides (SMB/FTP/HTTP), mirroring the `max_results` block; new override test. |
+| 2 | `166ed13` | Shodan panel restructured to the vertical `checkbox \| Max \| Query` grid + per-protocol grey-out; static query prefill; `DEFAULT_GEOMETRY` 720→800. |
+| 3 | `461a256` | Query reconcile (mirror Self-hosted; `shodan:<PROTO>` destinations), validation (required-when-selected + ≤500), request wiring + `build_protocol_scan_options` propagation. |
+| 4 | `cb7f0d1` | Shared masked API-key row (Elevated-Risk): `show="•"` + reveal toggle + Keymaster button; non-raising prefill; `api_key_override` run-scoped via the **unchanged** gate; FocusIn reconcile; `DEFAULT_GEOMETRY` 800→824. |
+| fix | `b125386` | Test-harness follow-up to Card 3: the full-suite run caught `test_unified_scan_dialog_searxng_controls.py`'s own `_make_dialog` missing the query vars; set them non-blank (test-only). |
+
+**Open questions — resolved and implemented as recommended:** Q1 run-scoped via
+the existing gate (no new secret-writing code; first-time entry persists, later
+inline edits never overwrite the saved key); Q2 Self-hosted reconcile mirrored
+exactly; Q3 required-when-selected + a new 500-char run-local cap.
+
+**Elevated-Risk sign-off:** Card 4 (credential surface) had an independent
+security review in a separate session — verdict **SHIP**, no defects. Eight
+properties PASS: masked-by-default; key never logged/argv/title/template/
+settings; gate unchanged; non-raising prefill; correct run-scoped Q1 flow; no
+new `grab_set`; correct provider-level grey-out; temp-config exposure is
+pre-existing (owner-only `0600`, deleted in `finally`).
+
+**Validation (RA, actual):** gui/tests → **2498 passed, 8 skipped, 3 failed**.
+All 3 failures are **pre-existing and environmental**, confirmed by running them
+at the pre-Shodan baseline `5fbf801` (they fail identically there): the Start
+Scan geometry-restore test (`test_start_scan_remembers_dragged_position_on_reopen`
+— WM title-bar Y offset) and two `test_analyst_*` tests (window-height assertion
++ analyst service logic). The Shodan work touches **no** analyst/webui/shared
+files, so the broader full-suite failures (missing `pydantic`/`openai`; webui
+sandbox) are out of scope. Guardrails (messagebox, theme-style) green.
+
+**Optional future polish (non-blocking, from the security review):** re-mask the
+key entry (`show="•"`) when the Shodan provider is toggled OFF — today a revealed
+key stays visible-but-greyed until reopen. Never persisted/logged; low severity.
+
+**Ready for HI testing** via `./dirracuda` using the Manual steps in §Validation
+above. HI still owns the push of all `development` commits.

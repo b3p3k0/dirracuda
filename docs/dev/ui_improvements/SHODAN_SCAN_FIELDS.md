@@ -1,9 +1,13 @@
 # Start Scan — Shodan provider field parity
 
-**Status:** Decisions confirmed by HI in an AA (advising) session, 2026-10-06.
-Input for PA planning — **this is a decision record, not yet a plan.** PA must
-verify every code reference below against the repo before writing cards
-(running code outranks this document).
+**Status:** IMPLEMENTED on `development` (2026-10-06) — see
+[SHODAN_SCAN_FIELDS_PLAN.md](SHODAN_SCAN_FIELDS_PLAN.md) §RA Closeout for the
+commit map, security sign-off, and HI manual-test steps. This remains the HI
+decision record; the open questions below were resolved in the plan (Q1
+run-scoped via the existing gate; Q2 mirror Self-hosted reconcile; Q3
+required-when-selected + a 500-char run-local cap). All code references here
+were verified against the repo before implementation (running code outranks
+this document).
 
 ## Problem
 
