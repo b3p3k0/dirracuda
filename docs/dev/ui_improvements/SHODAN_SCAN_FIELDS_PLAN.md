@@ -366,9 +366,11 @@ theme-style guardrails run as part of the full suite.
 **Manual (HI), via the only entrypoint `./dirracuda`):** (API-key row is Design B
 after Card 6 — a sentinel status field, no reveal; the stored key is never shown.)
 1. Open **Start New Scan**; select Shodan. Confirm the **API key** row shows a
-   status token (`<CONFIGURED>` if a key is stored, else `<not set>`) and a
-   `Keymaster…` button — **no Show/reveal control** — plus the per-protocol
-   `Max | Query` grid with saved dorks prefilled.
+   status token — `<CONFIGURED> | AbCD…` (first 4 chars of the stored key, as an
+   identifier, only when the key is >8 chars; bare `<CONFIGURED>` for short
+   keys), or `<not set>` — and a `Keymaster…` button — **no Show/reveal
+   control** — plus the per-protocol `Max | Query` grid with saved dorks
+   prefilled.
 2. Uncheck HTTP → its Max+Query grey out (stay visible); re-check → re-enable.
 3. Edit the SMB query, open Dorkbook, refresh/focus back → edit survives. Apply a
    Dorkbook SMB dork → the SMB row updates to the applied value.
@@ -433,6 +435,7 @@ All four cards implemented by DA sessions, each independently reviewed by RA
 | 4 | `cb7f0d1` | Shared masked API-key row (Elevated-Risk): `show="•"` + reveal toggle + Keymaster button; non-raising prefill; `api_key_override` run-scoped via the **unchanged** gate; FocusIn reconcile; `DEFAULT_GEOMETRY` 800→824. **(Reveal behavior superseded by Card 6.)** |
 | fix | `b125386` | Test-harness follow-up to Card 3: the full-suite run caught `test_unified_scan_dialog_searxng_controls.py`'s own `_make_dialog` missing the query vars; set them non-blank (test-only). |
 | 6 | `a81c89f` | **HI testing finding → redesign (Elevated-Risk).** Card 4's `Show` toggle revealed the stored key in plaintext without the Keymaster passphrase. HI chose **Design B**: the API-key field is a non-secret sentinel status token (`<CONFIGURED>`/`<not set>`), **no reveal control**; focusing it gives a masked one-off override box. The stored key is never read into the field (only a boolean presence check). Independent security re-check (separate session): **SHIP, bypass closed**. |
+| 7 | `e7f18d1` | **HI enhancement (Elevated-Risk, bounded).** Show a first-4-char identifier on the configured token — `<CONFIGURED> | AbCD…` — matching how HI identifies keys in Keymaster. Exposure is strictly ≤ Keymaster's existing display: at most the first 4 chars, only for keys >8 chars (short keys show no prefix); the full key never leaves `_shodan_sentinel_token`. RA focused security check + tests confirm the ≤4-char bound. |
 
 **Open questions — resolved and implemented as recommended:** Q1 run-scoped via
 the existing gate (no new secret-writing code; first-time entry persists, later

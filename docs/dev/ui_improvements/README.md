@@ -3,8 +3,9 @@
 ## Completed task: Start Scan — Shodan provider field parity
 
 Status: implemented on `development` (commits `899ce7e`, `166ed13`, `461a256`,
-`cb7f0d1`, `b125386`, and `a81c89f` — the Card 6 redesign of the API-key field
-after an HI testing finding); ready for HI re-test, not yet pushed.
+`cb7f0d1`, `b125386`, `a81c89f` — the Card 6 redesign of the API-key field
+after an HI testing finding — and `e7f18d1` — Card 7, a bounded first-4-char
+key identifier on the status token); ready for HI re-test, not yet pushed.
 
 Brings the Shodan provider in the unified Start Scan dialog to parity with
 Self-hosted Search: a shared masked API-key row with a reveal toggle and a
