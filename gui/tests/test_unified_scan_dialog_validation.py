@@ -80,6 +80,9 @@ def _make_dialog() -> UnifiedScanDialog:
     dlg.smb_max_results_var = _Var("100")
     dlg.ftp_max_results_var = _Var("100")
     dlg.http_max_results_var = _Var("100")
+    dlg.smb_shodan_query_var = _Var("smb base query")
+    dlg.ftp_shodan_query_var = _Var("ftp base query")
+    dlg.http_shodan_query_var = _Var("http base query")
     dlg.country_var = _Var("")
     dlg.security_mode_var = _Var("cautious")
     dlg.verbose_var = _Var(False)
@@ -313,3 +316,50 @@ def test_inline_max_results_vars_flow_into_build_scan_request(monkeypatch):
     assert payload["smb_max_query_credits_per_scan"] == 5
     assert payload["ftp_max_query_credits_per_scan"] == 8
     assert payload["http_max_query_credits_per_scan"] == 3
+
+
+def test_blank_shodan_query_for_selected_protocol_raises():
+    dlg = _make_dialog()  # SMB selected by default
+    dlg.smb_shodan_query_var.set("")
+    with pytest.raises(ValueError, match="Shodan SMB query is required when SMB is selected"):
+        dlg._build_scan_request()
+
+
+def test_blank_shodan_query_for_unchecked_protocol_does_not_raise(monkeypatch):
+    monkeypatch.setattr("gui.components.unified_scan_dialog.persist_query_budget_state", lambda *_a, **_k: None)
+    dlg = _make_dialog()
+    dlg.protocol_smb_var.set(True)
+    dlg.protocol_ftp_var.set(False)
+    dlg.protocol_http_var.set(False)
+    dlg.smb_shodan_query_var.set("valid smb")
+    dlg.ftp_shodan_query_var.set("")  # unchecked -> inert, not validated
+
+    request = dlg._build_scan_request()
+
+    assert request["smb_shodan_query"] == "valid smb"
+    assert "ftp_shodan_query" not in request
+    assert "http_shodan_query" not in request
+
+
+def test_shodan_query_over_500_chars_raises():
+    dlg = _make_dialog()  # SMB selected by default
+    dlg.smb_shodan_query_var.set("a" * 501)
+    with pytest.raises(ValueError, match="Shodan SMB query must not exceed 500 characters"):
+        dlg._build_scan_request()
+
+
+def test_shodan_queries_flow_into_build_scan_request_for_selected_only(monkeypatch):
+    monkeypatch.setattr("gui.components.unified_scan_dialog.persist_query_budget_state", lambda *_a, **_k: None)
+    dlg = _make_dialog()
+    dlg.protocol_smb_var.set(True)
+    dlg.protocol_ftp_var.set(False)  # unchecked -> excluded
+    dlg.protocol_http_var.set(True)
+    dlg.smb_shodan_query_var.set("  smb q  ")  # stripped before submit
+    dlg.ftp_shodan_query_var.set("ftp q")
+    dlg.http_shodan_query_var.set("http q")
+
+    request = dlg._build_scan_request()
+
+    assert request["smb_shodan_query"] == "smb q"
+    assert request["http_shodan_query"] == "http q"
+    assert "ftp_shodan_query" not in request

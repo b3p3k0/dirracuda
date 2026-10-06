@@ -61,3 +61,24 @@ def test_build_protocol_scan_options_uses_shared_legacy_cap_when_present():
     assert smb_opts["smb_max_query_credits_per_scan"] == 8
     assert ftp_opts["ftp_max_query_credits_per_scan"] == 8
     assert http_opts["http_max_query_credits_per_scan"] == 8
+
+
+def test_build_protocol_scan_options_propagates_per_protocol_shodan_query():
+    common = {
+        "country": "US",
+        "smb_shodan_query": "smb q",
+        "ftp_shodan_query": "ftp q",
+        "http_shodan_query": "http q",
+    }
+
+    assert build_protocol_scan_options("smb", common)["smb_shodan_query"] == "smb q"
+    assert build_protocol_scan_options("ftp", common)["ftp_shodan_query"] == "ftp q"
+    assert build_protocol_scan_options("http", common)["http_shodan_query"] == "http q"
+
+
+def test_build_protocol_scan_options_absent_shodan_query_is_none():
+    common = {"country": "US"}
+
+    assert build_protocol_scan_options("smb", common)["smb_shodan_query"] is None
+    assert build_protocol_scan_options("ftp", common)["ftp_shodan_query"] is None
+    assert build_protocol_scan_options("http", common)["http_shodan_query"] is None

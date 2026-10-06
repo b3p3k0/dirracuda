@@ -318,6 +318,7 @@ def build_protocol_scan_options(protocol: str, common_options: Dict[str, Any]) -
             "smb_max_query_credits_per_scan": smb_budget,
             "ftp_max_query_credits_per_scan": ftp_budget,
             "http_max_query_credits_per_scan": http_budget,
+            "smb_shodan_query": common_options.get("smb_shodan_query"),
         }
 
     if protocol == "ftp":
@@ -339,6 +340,7 @@ def build_protocol_scan_options(protocol: str, common_options: Dict[str, Any]) -
             "smb_max_query_credits_per_scan": smb_budget,
             "ftp_max_query_credits_per_scan": ftp_budget,
             "http_max_query_credits_per_scan": http_budget,
+            "ftp_shodan_query": common_options.get("ftp_shodan_query"),
         }
 
     # HTTP
@@ -364,6 +366,7 @@ def build_protocol_scan_options(protocol: str, common_options: Dict[str, Any]) -
         "smb_max_query_credits_per_scan": smb_budget,
         "ftp_max_query_credits_per_scan": ftp_budget,
         "http_max_query_credits_per_scan": http_budget,
+        "http_shodan_query": common_options.get("http_shodan_query"),
     }
 
 

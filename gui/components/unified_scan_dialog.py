@@ -143,10 +143,17 @@ class UnifiedScanDialog:
         self._load_initial_values()
         self._init_tls_policy_default()
         self._create_dialog()
-        from gui.components.dorkbook_events import bind_self_hosted_query, refresh_self_hosted_query
+        from gui.components.dorkbook_events import (
+            bind_self_hosted_query,
+            refresh_self_hosted_query,
+            bind_shodan_queries,
+            refresh_shodan_queries,
+        )
         if not self._settings_manager:
             refresh_self_hosted_query(self)
+            refresh_shodan_queries(self)
         bind_self_hosted_query(self)
+        bind_shodan_queries(self)
 
     # ------------------------------------------------------------------
     # Defaults/load/persist
@@ -987,10 +994,25 @@ class UnifiedScanDialog:
         )
 
         # Protocols only required when Shodan is selected
+        shodan_queries: Dict[str, str] = {}
         if "shodan" in providers:
             protocols = self._resolve_selected_protocols()
             if not protocols:
                 raise ValueError("Select at least one protocol (SMB, FTP, or HTTP).")
+            _shodan_query_vars = {
+                "smb": getattr(self, "smb_shodan_query_var", None),
+                "ftp": getattr(self, "ftp_shodan_query_var", None),
+                "http": getattr(self, "http_shodan_query_var", None),
+            }
+            for proto in protocols:
+                _q_var = _shodan_query_vars.get(proto)
+                query = str(_q_var.get() if _q_var else "").strip()
+                PROTO = proto.upper()
+                if not query:
+                    raise ValueError(f"Shodan {PROTO} query is required when {PROTO} is selected.")
+                if len(query) > 500:
+                    raise ValueError(f"Shodan {PROTO} query must not exceed 500 characters.")
+                shodan_queries[proto] = query
         else:
             protocols = []
 
@@ -1087,6 +1109,8 @@ class UnifiedScanDialog:
             )
         if "reddit" in providers:
             request.update(reddit_opts)
+        for proto, query in shodan_queries.items():
+            request[f"{proto}_shodan_query"] = query
         return request
 
     def _start(self) -> None:
