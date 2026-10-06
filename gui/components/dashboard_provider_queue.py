@@ -363,6 +363,13 @@ def cancel_provider_queue(dash, *, notify: bool = False) -> bool:
                 _evt.set()
             except Exception:
                 pass
+    if current == "reddit":
+        _evt = getattr(dash, "_reddit_cancel_event", None)
+        if _evt is not None:
+            try:
+                _evt.set()
+            except Exception:
+                pass
     _remove_task(dash)
     _hook(dash, "_log_status_event", "Unified provider queue cancelled.")
     if notify:

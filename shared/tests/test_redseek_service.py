@@ -10,6 +10,7 @@ No conftest.py — all fixtures and helpers are local.
 
 import datetime
 import sqlite3
+import threading
 from pathlib import Path
 from unittest.mock import patch
 
@@ -669,6 +670,68 @@ def test_bulk_probe_progress_matches_summary(tmp_path, monkeypatch):
         raise RuntimeError("progress boom")
 
     assert _svc._probe_targets_for_keys(keys, db, progress_cb=_raise_progress) == summary
+
+
+@pytest.mark.parametrize("cancel_mode", ["pre_set", "during_probe", "none", "after_record"])
+def test_bulk_probe_cancellation(tmp_path, monkeypatch, cancel_mode):
+    db = tmp_path / "test.db"
+    posts = [
+        _make_raw_post(f"p{index}", title=f"http://host{index}.example.com/files")
+        for index in range(3)
+    ]
+    with patch("experimental.redseek.service.fetch_posts", return_value=_make_fetch(posts)):
+        result = run_ingest(_make_opts(), db_path=db)
+    assert result.error is None
+    keys = list(result._probe_candidate_keys)
+    assert len(keys) == 3
+
+    cancel_event = None if cancel_mode == "none" else threading.Event()
+    if cancel_mode == "pre_set":
+        cancel_event.set()
+    monkeypatch.setattr(
+        "gui.utils.sidecar_probe.build_indicator_patterns",
+        lambda _config_path: [],
+    )
+    probe_calls = []
+
+    def _fake_probe(target, **kwargs):
+        assert kwargs["cancel_event"] is cancel_event
+        probe_calls.append(target)
+        if cancel_mode == "during_probe":
+            cancel_event.set()
+        return SidecarProbeOutcome(
+            probe_status="clean",
+            probe_indicator_matches=0,
+            probe_preview=None,
+            probe_checked_at="2026-05-03T10:20:30",
+            probe_error=None,
+        )
+
+    def _progress(msg):
+        if cancel_mode == "after_record" and msg.startswith("Probing 1/3"):
+            cancel_event.set()
+
+    monkeypatch.setattr("gui.utils.sidecar_probe.run_sidecar_probe", _fake_probe)
+    summary = _svc._probe_targets_for_keys(
+        keys, db, cancel_event=cancel_event, progress_cb=_progress,
+    )
+    assert summary["total"] + summary["skipped"] == len(keys)
+    if cancel_mode == "pre_set":
+        assert summary == {"total": 0, "clean": 0, "issue": 0, "unprobed": 0, "skipped": 3}
+        assert probe_calls == []
+    elif cancel_mode == "during_probe":
+        assert summary["skipped"] >= 1
+    elif cancel_mode == "after_record":
+        assert summary["total"] == 1
+        assert summary["skipped"] == 2
+    else:
+        assert summary == {"total": 3, "clean": 3, "issue": 0, "unprobed": 0, "skipped": 0}
+
+    with open_connection(db) as conn:
+        recorded = conn.execute(
+            "SELECT COUNT(*) FROM reddit_targets WHERE probe_checked_at IS NOT NULL"
+        ).fetchone()[0]
+    assert recorded == summary["total"]
 
 
 def test_bulk_probe_failure_marks_target_unprobed_without_failing_ingest(tmp_path, monkeypatch):

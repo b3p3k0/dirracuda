@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -279,8 +280,10 @@ def test_cancel_clears_pending_and_blocks_restart(monkeypatch):
 
     provider_queue.start_provider_queue(dash, _request(["reddit", "searxng"]))
     old_generation = dash._provider_queue_generation
+    dash._reddit_cancel_event = threading.Event()
 
     assert provider_queue.cancel_provider_queue(dash)
+    assert dash._reddit_cancel_event.is_set()
     assert dash._provider_queue_pending == []
     assert dash._provider_queue_active is False
     assert dash._provider_queue_generation > old_generation

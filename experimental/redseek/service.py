@@ -26,6 +26,7 @@ replace_cache semantics:
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import datetime
 import sqlite3
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Literal, Optional
@@ -232,6 +233,7 @@ def _probe_targets_for_keys(
     worker_count: int = 3,
     probe_limits: Optional[dict[str, int]] = None,
     progress_cb: Optional[Callable[[str], None]] = None,
+    cancel_event: Optional[threading.Event] = None,
 ) -> dict[str, int]:
     """Probe current-run concrete targets and persist sidecar probe fields."""
     from gui.utils.sidecar_probe import (
@@ -293,6 +295,10 @@ def _probe_targets_for_keys(
 
     try:
         _emit_probe_progress(progress_cb, f"Probing {len(targets)} targets…")
+        if cancel_event is not None and cancel_event.is_set():
+            counts["skipped"] += len(targets)
+            conn.commit()
+            return counts
         with ThreadPoolExecutor(
             max_workers=max_workers,
             thread_name_prefix="reddit-sidecar-probe",
@@ -303,11 +309,19 @@ def _probe_targets_for_keys(
                     target,
                     config_path=config_path,
                     indicator_patterns=patterns,
+                    cancel_event=cancel_event,
                     **(probe_limits or {}),
                 ): row
                 for row, target in targets
             }
             for future in as_completed(future_to_row):
+                if cancel_event is not None and cancel_event.is_set():
+                    # Unsupported rows were counted before submission; only add
+                    # the current and remaining unrecorded supported targets.
+                    counts["skipped"] += len(future_to_row) - counts["total"]
+                    for pending in future_to_row:
+                        pending.cancel()
+                    break
                 row = future_to_row[future]
                 try:
                     outcome = future.result()
@@ -363,6 +377,7 @@ def _finalize_result_with_optional_probe(
     db_path: Optional[Path],
     *,
     progress_cb: Optional[Callable[[str], None]] = None,
+    cancel_event: Optional[threading.Event] = None,
 ) -> IngestResult:
     """Apply the explicit bulk probe pass after ingest commits successfully."""
     bulk_probe_enabled = bool(getattr(options, "bulk_probe_enabled", False))
@@ -378,6 +393,7 @@ def _finalize_result_with_optional_probe(
         worker_count=_resolve_probe_worker_count(options),
         probe_limits=_resolve_probe_limits(options),
         progress_cb=progress_cb,
+        cancel_event=cancel_event,
     )
     result.probe_total = summary.get("total", 0)
     result.probe_clean = summary.get("clean", 0)
@@ -804,6 +820,7 @@ def run_ingest(
     db_path: Optional[Path] = None,
     *,
     progress_cb: Optional[Callable[[str], None]] = None,
+    cancel_event: Optional[threading.Event] = None,
 ) -> IngestResult:
     """
     Run one ingestion cycle for the given options.
@@ -894,4 +911,5 @@ def run_ingest(
         result = _run_top(options, fetch_result, db_path, now_str, replace_cache_done)
     return _finalize_result_with_optional_probe(
         options, result, db_path, progress_cb=progress_cb,
+        cancel_event=cancel_event,
     )

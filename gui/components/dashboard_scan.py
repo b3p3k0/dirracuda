@@ -746,6 +746,12 @@ def start_reddit_scan(dash, scan_request: dict) -> bool:
     except Exception:
         pass
 
+    cancel_event = threading.Event()
+    try:
+        dash._reddit_cancel_event = cancel_event
+    except Exception:
+        pass
+
     _providers = [str(p).strip().lower() for p in (scan_request.get("providers") or [])]
     _reddit_only = set(_providers) == {"reddit"}
 
@@ -788,7 +794,10 @@ def start_reddit_scan(dash, scan_request: dict) -> bool:
 
         try:
             _ui_log("Fetching Reddit posts...")
-            result = run_ingest(options, db_path=db_path, progress_cb=_probe_progress)
+            result = run_ingest(
+                options, db_path=db_path, progress_cb=_probe_progress,
+                cancel_event=cancel_event,
+            )
         except Exception as exc:
             from experimental.redseek.service import IngestResult
             result = IngestResult(
@@ -820,6 +829,7 @@ def start_reddit_scan(dash, scan_request: dict) -> bool:
         except Exception:
             try:
                 dash._reddit_scan_running = False
+                dash._reddit_cancel_event = None
             except Exception:
                 pass
             _call_dashboard_hook(dash, "_clear_reddit_task")
@@ -834,6 +844,7 @@ def start_reddit_scan(dash, scan_request: dict) -> bool:
     except Exception as exc:
         try:
             dash._reddit_scan_running = False
+            dash._reddit_cancel_event = None
         except Exception:
             pass
         _call_dashboard_hook(dash, "_clear_reddit_task")
@@ -860,6 +871,10 @@ def _on_reddit_scan_done(
     provider_generation: int = 0,
 ) -> None:
     """Handle Reddit ingest completion on the UI thread."""
+    try:
+        dash._reddit_cancel_event = None
+    except Exception:
+        pass
     try:
         dash._reddit_scan_running = False
     except Exception:

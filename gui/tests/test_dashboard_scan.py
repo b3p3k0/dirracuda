@@ -875,7 +875,10 @@ class TestStartRedditScan:
         dash = _make_dash()
         captured = []
 
-        def _fake_run(options, db_path=None, *, progress_cb=None):
+        def _fake_run(options, db_path=None, *, progress_cb=None, cancel_event=None):
+            assert isinstance(cancel_event, threading.Event)
+            assert cancel_event is dash._reddit_cancel_event
+            assert not cancel_event.is_set()
             captured.append(options)
             return _make_reddit_result()
 
@@ -904,7 +907,7 @@ class TestStartRedditScan:
         dash = _make_dash()
         captured = []
 
-        def _fake_run(options, db_path=None, *, progress_cb=None):
+        def _fake_run(options, db_path=None, *, progress_cb=None, cancel_event=None):
             captured.append(options)
             return _make_reddit_result()
 
@@ -924,7 +927,7 @@ class TestStartRedditScan:
         dash = _make_dash()
         errors = []
 
-        def _fake_run(options, db_path=None, *, progress_cb=None):
+        def _fake_run(options, db_path=None, *, progress_cb=None, cancel_event=None):
             raise AssertionError("run_ingest should not be called for unsupported user mode")
 
         monkeypatch.setattr("experimental.redseek.service.run_ingest", _fake_run)
@@ -945,7 +948,7 @@ class TestStartRedditScan:
         dash = _make_dash()
         captured = []
 
-        def _fake_run(options, db_path=None, *, progress_cb=None):
+        def _fake_run(options, db_path=None, *, progress_cb=None, cancel_event=None):
             captured.append(options)
             return _make_reddit_result()
 
@@ -967,7 +970,7 @@ class TestStartRedditScan:
         dash = _make_dash()
         captured = []
 
-        def _fake_run(options, db_path=None, *, progress_cb=None):
+        def _fake_run(options, db_path=None, *, progress_cb=None, cancel_event=None):
             captured.append(options)
             return _make_reddit_result()
 
@@ -990,7 +993,7 @@ class TestStartRedditScan:
         dash.settings_manager = sm
         captured = []
 
-        def _fake_run(options, db_path=None, *, progress_cb=None):
+        def _fake_run(options, db_path=None, *, progress_cb=None, cancel_event=None):
             captured.append(options)
             return _make_reddit_result()
 
@@ -1103,10 +1106,12 @@ class TestOnRedditScanDone:
     def test_clears_running_flag_on_completion(self, monkeypatch):
         dash = _make_dash()
         dash._reddit_scan_running = True
+        dash._reddit_cancel_event = threading.Event()
         clear_calls = []
         dash._clear_reddit_task = lambda: clear_calls.append(True)
         ds._on_reddit_scan_done(dash, _make_reddit_result())
         assert dash._reddit_scan_running is False
+        assert dash._reddit_cancel_event is None
         assert clear_calls == [True]
 
     def test_clears_running_flag_on_error(self, monkeypatch):
@@ -1241,7 +1246,7 @@ class TestStartRedditScanPrimaryDB:
         dash = _make_dash()
         captured_db: list = []
 
-        def _fake_run(options, db_path=None, *, progress_cb=None):
+        def _fake_run(options, db_path=None, *, progress_cb=None, cancel_event=None):
             captured_db.append(db_path)
             return _make_reddit_result()
 
