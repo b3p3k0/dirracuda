@@ -1,6 +1,15 @@
 # UI improvements
 
-## Current task: Server List Most Recent Scan Only filter
+## Current task: Start Scan — Shodan provider field parity
+
+Brings the Shodan provider in the unified Start Scan dialog to parity with
+Self-hosted Search: a masked API-key row with a `Keymaster…` button, and a
+per-protocol editable Shodan query grid (Option A). Decisions are confirmed by
+HI (AA session); PA writes the implementation plan in a later session. See
+[SHODAN_SCAN_FIELDS.md](SHODAN_SCAN_FIELDS.md) for the problem, decisions,
+mockups, code references, and open questions for PA.
+
+## Completed task: Server List Most Recent Scan Only filter
 
 Adds a `Most Recent Scan Only` option to `Filters ▾`. It shows hosts from the
 last desktop provider-queue run and removes the broken `Since Last Scan` date
