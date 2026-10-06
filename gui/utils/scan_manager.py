@@ -361,6 +361,11 @@ class ScanManager:
                 except (TypeError, ValueError):
                     pass
 
+            # Per-protocol Shodan dork (run-scoped; does not overwrite saved config).
+            smb_query = scan_options.get('smb_shodan_query')
+            if smb_query:
+                config_overrides.setdefault('shodan', {}).setdefault('query_components', {})['base_query'] = smb_query
+
             smb_budget = _resolve_query_credit_budget(
                 scan_options.get("smb_max_query_credits_per_scan"),
                 max_results,
@@ -1026,6 +1031,15 @@ class ScanManager:
                  .setdefault("query_limits", {})
                  )["max_results"] = max_results
 
+            # Per-protocol Shodan dork (run-scoped; does not overwrite saved config).
+            ftp_query = scan_options.get("ftp_shodan_query")
+            if ftp_query:
+                (config_overrides
+                 .setdefault("ftp", {})
+                 .setdefault("shodan", {})
+                 .setdefault("query_components", {})
+                 )["base_query"] = ftp_query
+
             ftp_budget = _resolve_query_credit_budget(
                 scan_options.get("ftp_max_query_credits_per_scan"),
                 max_results,
@@ -1179,6 +1193,15 @@ class ScanManager:
                  .setdefault("shodan", {})
                  .setdefault("query_limits", {})
                  )["max_results"] = max_results
+
+            # Per-protocol Shodan dork (run-scoped; does not overwrite saved config).
+            http_query = scan_options.get("http_shodan_query")
+            if http_query:
+                (config_overrides
+                 .setdefault("http", {})
+                 .setdefault("shodan", {})
+                 .setdefault("query_components", {})
+                 )["base_query"] = http_query
 
             http_budget = _resolve_query_credit_budget(
                 scan_options.get("http_max_query_credits_per_scan"),
