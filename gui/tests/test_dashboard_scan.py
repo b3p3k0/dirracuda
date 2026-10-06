@@ -1041,6 +1041,47 @@ class TestStartRedditScan:
 # ---------------------------------------------------------------------------
 
 class TestOnRedditScanDone:
+    def test_rate_limited_result_shows_warning_without_error(self, monkeypatch):
+        dash = _make_dash()
+        warnings = []
+        errors = []
+        log_msgs = []
+        dash._log_status_event = log_msgs.append
+        monkeypatch.setattr(
+            "gui.components.dashboard.messagebox.showwarning",
+            lambda *a, **k: warnings.append(a),
+        )
+        monkeypatch.setattr(
+            "gui.components.dashboard.messagebox.showerror",
+            lambda *a, **k: errors.append(a),
+        )
+        result = _make_reddit_result(rate_limited=True, error="HTTP 429")
+        ds._on_reddit_scan_done(dash, result, reddit_only=True, queue_managed=False)
+        msg = (
+            "Reddit rate-limited this request. Wait ~30–60s and try again "
+            "(space new/top runs apart)."
+        )
+        assert warnings == [("Reddit Rate Limited", msg)]
+        assert errors == []
+        assert log_msgs == [msg]
+
+    def test_non_rate_limited_error_keeps_error_dialog(self, monkeypatch):
+        dash = _make_dash()
+        warnings = []
+        errors = []
+        monkeypatch.setattr(
+            "gui.components.dashboard.messagebox.showwarning",
+            lambda *a, **k: warnings.append(a),
+        )
+        monkeypatch.setattr(
+            "gui.components.dashboard.messagebox.showerror",
+            lambda *a, **k: errors.append(a),
+        )
+        result = _make_reddit_result(rate_limited=False, error="boom")
+        ds._on_reddit_scan_done(dash, result, reddit_only=True, queue_managed=False)
+        assert errors == [("Reddit Ingest Error", "Reddit ingest failed: boom")]
+        assert warnings == []
+
     def test_error_result_shows_showerror(self, monkeypatch):
         dash = _make_dash()
         errors = []

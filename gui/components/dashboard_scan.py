@@ -881,6 +881,26 @@ def _on_reddit_scan_done(
         pass
     _call_dashboard_hook(dash, "_clear_reddit_task")
 
+    if getattr(result, "rate_limited", False):
+        msg = (
+            "Reddit rate-limited this request. Wait ~30–60s and try again "
+            "(space new/top runs apart)."
+        )
+        _call_dashboard_hook(dash, "_log_status_event", msg)
+        if queue_managed:
+            from gui.components.dashboard_provider_queue import complete_provider
+
+            complete_provider(
+                dash,
+                "reddit",
+                provider_generation,
+                success=False,
+                error="rate_limited",
+            )
+        else:
+            _mb().showwarning("Reddit Rate Limited", msg)
+        return
+
     if result.error:
         _call_dashboard_hook(dash, "_log_status_event", f"Reddit ingest failed: {result.error}")
         if queue_managed:
