@@ -5,9 +5,10 @@
 Brings the Shodan provider in the unified Start Scan dialog to parity with
 Self-hosted Search: a masked API-key row with a `Keymaster…` button, and a
 per-protocol editable Shodan query grid (Option A). Decisions are confirmed by
-HI (AA session); PA writes the implementation plan in a later session. See
-[SHODAN_SCAN_FIELDS.md](SHODAN_SCAN_FIELDS.md) for the problem, decisions,
-mockups, code references, and open questions for PA.
+HI (AA session). See [SHODAN_SCAN_FIELDS.md](SHODAN_SCAN_FIELDS.md) for the
+problem, decisions, mockups, code references, and open questions, and
+[SHODAN_SCAN_FIELDS_PLAN.md](SHODAN_SCAN_FIELDS_PLAN.md) for the PA
+implementation plan (task cards, resolved open questions, verified code refs).
 
 ## Completed task: Server List Most Recent Scan Only filter
 
