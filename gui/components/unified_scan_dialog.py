@@ -134,6 +134,13 @@ class UnifiedScanDialog:
         self.ftp_shodan_query_var = tk.StringVar(value="")
         self.http_shodan_query_var = tk.StringVar(value="")
 
+        # Shared Shodan API key (Card 4; one per account, masked by default).
+        # Prefilled from saved config via the non-raising accessor; never logged.
+        # The baseline drives FocusIn reconcile so a Keymaster Apply shows up
+        # without reopening the dialog.
+        self.shodan_api_key_var = tk.StringVar(value="")
+        self._shodan_api_key_default = ""
+
         # Template UI state
         self.template_var = tk.StringVar()
         self._template_label_to_slug: Dict[str, str] = {}
@@ -152,8 +159,10 @@ class UnifiedScanDialog:
         if not self._settings_manager:
             refresh_self_hosted_query(self)
             refresh_shodan_queries(self)
+            self._refresh_shodan_api_key_field()
         bind_self_hosted_query(self)
         bind_shodan_queries(self)
+        self._bind_shodan_api_key_refresh()
 
     # ------------------------------------------------------------------
     # Defaults/load/persist
@@ -297,6 +306,17 @@ class UnifiedScanDialog:
             self.smb_shodan_query_var.set(_dorks.get("shodan:SMB", ""))
             self.ftp_shodan_query_var.set(_dorks.get("shodan:FTP", ""))
             self.http_shodan_query_var.set(_dorks.get("shodan:HTTP", ""))
+        except Exception:
+            pass
+
+        # Static prefill of the shared Shodan API key from saved config (Card 4).
+        # Uses the non-raising safe accessor (NOT get_shodan_api_key, which RAISES
+        # when empty); the key is never logged. Baseline drives FocusIn reconcile.
+        try:
+            from shared.config import SMBSeekConfig
+            _api_key = SMBSeekConfig(str(self.config_path)).get("shodan", "api_key", "") or ""
+            self.shodan_api_key_var.set(_api_key)
+            self._shodan_api_key_default = _api_key
         except Exception:
             pass
 
@@ -634,6 +654,42 @@ class UnifiedScanDialog:
 
         self._refresh_protocol_estimate_lines()
         sync_shodan_protocol_states(getattr(self, "_shodan_opts_frame", None))
+
+    def _refresh_shodan_api_key_field(self) -> None:
+        """Reconcile the inline Shodan API key with the stored value.
+
+        Keymaster is modeless and writes ``shodan.api_key`` to config directly;
+        it does NOT fire ``<<DorkbookApplied>>``. So this runs on dialog FocusIn
+        with reconcile semantics: an in-progress edit is preserved; an untouched
+        field snaps to the latest stored key. The key is never logged. Uses the
+        non-raising safe accessor; a transient read failure keeps the field.
+        """
+        try:
+            from shared.config import SMBSeekConfig
+            latest = SMBSeekConfig(str(self.config_path)).get("shodan", "api_key", "") or ""
+        except Exception:
+            return
+        from experimental.dorkbook.defaults import reconcile_query
+        self.shodan_api_key_var.set(
+            reconcile_query(
+                self.shodan_api_key_var.get(),
+                self._shodan_api_key_default,
+                latest,
+            )
+        )
+        self._shodan_api_key_default = latest
+
+    def _bind_shodan_api_key_refresh(self) -> None:
+        """Refresh the inline API key on dialog FocusIn (credential logic stays here)."""
+        def _refresh(event):
+            if event.widget is not self.dialog:
+                return
+            try:
+                self._refresh_shodan_api_key_field()
+            except (OSError, ValueError, RuntimeError):
+                # Keep the visible key on a transient config read failure.
+                return
+        self.dialog.bind("<FocusIn>", _refresh, add="+")
 
     def _sync_searxng_options_state(self, *_args) -> None:
         from gui.components.scan_provider_options import sync_searxng_option_state
@@ -995,10 +1051,17 @@ class UnifiedScanDialog:
 
         # Protocols only required when Shodan is selected
         shodan_queries: Dict[str, str] = {}
+        shodan_api_key_override = ""
         if "shodan" in providers:
             protocols = self._resolve_selected_protocols()
             if not protocols:
                 raise ValueError("Select at least one protocol (SMB, FTP, or HTTP).")
+            # Shared inline API key (Card 4). Blank => leave api_key_override unset
+            # so the existing gate prompts/uses config exactly as today. Non-blank
+            # => run-scoped override; the gate handles first-time persistence and
+            # never overwrites a stored key. No length validation; never logged.
+            _key_var = getattr(self, "shodan_api_key_var", None)
+            shodan_api_key_override = str(_key_var.get() if _key_var else "").strip()
             _shodan_query_vars = {
                 "smb": getattr(self, "smb_shodan_query_var", None),
                 "ftp": getattr(self, "ftp_shodan_query_var", None),
@@ -1111,6 +1174,8 @@ class UnifiedScanDialog:
             request.update(reddit_opts)
         for proto, query in shodan_queries.items():
             request[f"{proto}_shodan_query"] = query
+        if shodan_api_key_override:
+            request["api_key_override"] = shodan_api_key_override
         return request
 
     def _start(self) -> None:

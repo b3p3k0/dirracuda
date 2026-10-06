@@ -19,7 +19,11 @@ from gui.utils.window_positions import remember_window_position
 from gui.utils.keybindings import bind_close_shortcuts, bind_submit_shortcuts
 
 
-DEFAULT_GEOMETRY = "960x800"
+# Height bumped 800 -> 824 for the Card 4 shared API-key row at the top of the
+# Shodan panel: the extra row pushed worst-case content (all providers on, all
+# regions selected) ~7px past the canvas, tripping the no-scroll guard. +24px
+# restores the fit-without-scroll margin; width unchanged.
+DEFAULT_GEOMETRY = "960x824"
 MIN_WIDTH = 840
 MIN_HEIGHT = 680
 
@@ -356,22 +360,80 @@ def _build_provider_section(owner: Any, parent: tk.Widget) -> None:
     )
 
 
+def _open_keymaster(owner: Any) -> None:
+    """Open the modeless Keymaster window; do not wait on it.
+
+    Keymaster writes shodan.api_key to config directly (no new grab_set/Toplevel
+    here); the dialog's FocusIn reconcile picks the new key up without reopening.
+    """
+    from gui.components.keymaster_window import show_keymaster_window
+
+    show_keymaster_window(
+        owner.dialog,
+        settings_manager=owner._settings_manager,
+        config_path=str(owner.config_path),
+    )
+
+
+def _toggle_shodan_key_reveal(entry: ttk.Entry, button: ttk.Button) -> None:
+    """Flip the masked key entry between hidden and visible.
+
+    Reveal state is transient/UI-only and is never persisted. Empty ``show``
+    means visible; the bullet masks it again.
+    """
+    try:
+        revealed = str(entry.cget("show")) == ""
+    except tk.TclError:
+        return
+    if revealed:
+        entry.configure(show="•")
+        button.configure(text="Show")
+    else:
+        entry.configure(show="")
+        button.configure(text="Hide")
+
+
 def _build_shodan_options(owner: Any, parent: tk.Widget) -> tk.Frame:
     # Vertical per-protocol grid (Option A): col 0 = protocol checkbox,
-    # col 1 = Max entry, col 2 = Shodan query entry (stretches). Dorkbook button
-    # sits top-right of the header strip; the estimate row spans the bottom.
+    # col 1 = Max entry, col 2 = Shodan query entry (stretches). A shared masked
+    # API-key row spans the top; the Dorkbook button sits top-right of the header
+    # strip; the estimate row spans the bottom.
     frame = tk.Frame(parent)
     owner.theme.apply_to_widget(frame, "main_window")
     frame.grid_columnconfigure(2, weight=1)
 
-    _muted_label(owner, frame, "Max").grid(row=0, column=1, sticky="w", padx=(0, 8))
-    _muted_label(owner, frame, "Shodan query").grid(row=0, column=2, sticky="w")
+    # Shared masked API-key row (Card 4) — one per account, spans the panel width.
+    # It lives inside the Shodan frame, so the provider-level _apply_state_recursive
+    # greys it when Shodan is OFF. The per-protocol grey-out
+    # (sync_shodan_protocol_states) only iterates _shodan_protocol_rows, so it never
+    # touches this row — correct, the key is shared across protocols.
+    key_row = tk.Frame(frame)
+    owner.theme.apply_to_widget(key_row, "main_window")
+    key_row.grid(row=0, column=0, columnspan=3, sticky="ew", pady=(0, 2))
+    _muted_label(owner, key_row, "API key").pack(side=tk.LEFT, padx=(0, 6))
+    keymaster_button = ttk.Button(
+        key_row, text="Keymaster...", width=12, padding=(4, 0),
+        command=lambda: _open_keymaster(owner),
+    )
+    keymaster_button.pack(side=tk.RIGHT, padx=(6, 0))
+    key_entry = ttk.Entry(key_row, textvariable=owner.shodan_api_key_var, show="•")
+    reveal_button = ttk.Button(
+        key_row, text="Show", width=6, padding=(4, 0),
+        command=lambda: _toggle_shodan_key_reveal(key_entry, reveal_button),
+    )
+    reveal_button.pack(side=tk.RIGHT, padx=(6, 0))
+    key_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
+    frame._shodan_api_key_entry = key_entry
+    frame._shodan_api_key_reveal_button = reveal_button
+
+    _muted_label(owner, frame, "Max").grid(row=1, column=1, sticky="w", padx=(0, 8))
+    _muted_label(owner, frame, "Shodan query").grid(row=1, column=2, sticky="w")
 
     dorkbook_button = ttk.Button(
         frame, text="Dorkbook...", width=12, padding=(4, 0),
         command=lambda: open_provider_dorkbook(owner, "shodan"),
     )
-    dorkbook_button.grid(row=0, column=2, sticky="e", pady=(0, 1))
+    dorkbook_button.grid(row=1, column=2, sticky="e", pady=(0, 1))
     frame._dorkbook_button = dorkbook_button
 
     protocol_items = (
@@ -381,7 +443,7 @@ def _build_shodan_options(owner: Any, parent: tk.Widget) -> tk.Frame:
     )
     protocol_rows = []
     for index, (label, selected_var, results_var, query_var) in enumerate(protocol_items):
-        row = index + 1
+        row = index + 2
         check = ttk.Checkbutton(
             frame,
             text=label,
@@ -398,7 +460,7 @@ def _build_shodan_options(owner: Any, parent: tk.Widget) -> tk.Frame:
 
     estimate_row = tk.Frame(frame)
     owner.theme.apply_to_widget(estimate_row, "main_window")
-    estimate_row.grid(row=4, column=0, columnspan=3, sticky="ew", pady=0)
+    estimate_row.grid(row=5, column=0, columnspan=3, sticky="ew", pady=0)
     owner._shodan_helper_row = estimate_row
     owner.protocol_cost_label = _muted_label(owner, estimate_row, "")
     owner.protocol_cost_label.pack(side=tk.LEFT)
