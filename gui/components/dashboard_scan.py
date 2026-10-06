@@ -928,7 +928,8 @@ def _on_reddit_scan_done(
             summary_lines += [
                 "",
                 f"Probe: {result.probe_total} attempted — {result.probe_clean} clean, "
-                f"{result.probe_issue} flagged, {result.probe_unprobed} unprobed.",
+                f"{result.probe_issue} flagged, {result.probe_unprobed} unprobed, "
+                f"{result.probe_skipped} skipped.",
             ]
         scan_results = {
             "protocol": "reddit",

@@ -27,6 +27,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import datetime
 import sqlite3
 import threading
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Literal, Optional
@@ -58,6 +59,12 @@ from experimental.redseek.store import (
 # Public data structures
 # ---------------------------------------------------------------------------
 
+# Bound worst-case probe fan-out and aggregate runtime for pathological feeds.
+# A value <= 0 disables the corresponding bound.
+PROBE_PASS_MAX_TARGETS = 50
+PROBE_PASS_DEADLINE_SECONDS = 180
+
+
 @dataclass
 class IngestOptions:
     sort: str                    # "new" | "top"
@@ -78,6 +85,8 @@ class IngestOptions:
     probe_max_files: int = 5
     probe_timeout_seconds: int = 10
     probe_max_depth: int = 1
+    probe_max_targets: int = PROBE_PASS_MAX_TARGETS
+    probe_deadline_seconds: int = PROBE_PASS_DEADLINE_SECONDS
     replace_cache_scope: Literal["full", "state_only"] = "full"
 
 
@@ -234,6 +243,8 @@ def _probe_targets_for_keys(
     probe_limits: Optional[dict[str, int]] = None,
     progress_cb: Optional[Callable[[str], None]] = None,
     cancel_event: Optional[threading.Event] = None,
+    max_targets: int = PROBE_PASS_MAX_TARGETS,
+    deadline_seconds: int = PROBE_PASS_DEADLINE_SECONDS,
 ) -> dict[str, int]:
     """Probe current-run concrete targets and persist sidecar probe fields."""
     from gui.utils.sidecar_probe import (
@@ -277,6 +288,18 @@ def _probe_targets_for_keys(
     if not targets:
         return counts
 
+    # Non-positive values disable the target cap.
+    if max_targets and max_targets > 0 and len(targets) > max_targets:
+        counts["skipped"] += len(targets) - max_targets
+        targets = targets[:max_targets]
+
+    effective_cancel = cancel_event or threading.Event()
+    # Non-positive values disable the wall-clock deadline.
+    deadline = (
+        time.monotonic() + deadline_seconds
+        if deadline_seconds and deadline_seconds > 0 else None
+    )
+
     try:
         patterns = build_indicator_patterns(config_path)
     except Exception:
@@ -295,7 +318,7 @@ def _probe_targets_for_keys(
 
     try:
         _emit_probe_progress(progress_cb, f"Probing {len(targets)} targets…")
-        if cancel_event is not None and cancel_event.is_set():
+        if effective_cancel.is_set():
             counts["skipped"] += len(targets)
             conn.commit()
             return counts
@@ -309,13 +332,17 @@ def _probe_targets_for_keys(
                     target,
                     config_path=config_path,
                     indicator_patterns=patterns,
-                    cancel_event=cancel_event,
+                    cancel_event=effective_cancel,
                     **(probe_limits or {}),
                 ): row
                 for row, target in targets
             }
             for future in as_completed(future_to_row):
-                if cancel_event is not None and cancel_event.is_set():
+                now = time.monotonic()
+                deadline_exceeded = deadline is not None and now >= deadline
+                if effective_cancel.is_set() or deadline_exceeded:
+                    if deadline_exceeded:
+                        effective_cancel.set()
                     # Unsupported rows were counted before submission; only add
                     # the current and remaining unrecorded supported targets.
                     counts["skipped"] += len(future_to_row) - counts["total"]
@@ -394,6 +421,8 @@ def _finalize_result_with_optional_probe(
         probe_limits=_resolve_probe_limits(options),
         progress_cb=progress_cb,
         cancel_event=cancel_event,
+        max_targets=getattr(options, "probe_max_targets", PROBE_PASS_MAX_TARGETS),
+        deadline_seconds=getattr(options, "probe_deadline_seconds", PROBE_PASS_DEADLINE_SECONDS),
     )
     result.probe_total = summary.get("total", 0)
     result.probe_clean = summary.get("clean", 0)

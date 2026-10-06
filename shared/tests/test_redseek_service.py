@@ -693,9 +693,16 @@ def test_bulk_probe_cancellation(tmp_path, monkeypatch, cancel_mode):
         lambda _config_path: [],
     )
     probe_calls = []
+    probe_events = []
 
     def _fake_probe(target, **kwargs):
-        assert kwargs["cancel_event"] is cancel_event
+        effective_cancel = kwargs["cancel_event"]
+        if cancel_event is not None:
+            assert effective_cancel is cancel_event
+        else:
+            assert isinstance(effective_cancel, threading.Event)
+            assert not effective_cancel.is_set()
+        probe_events.append(effective_cancel)
         probe_calls.append(target)
         if cancel_mode == "during_probe":
             cancel_event.set()
@@ -726,12 +733,77 @@ def test_bulk_probe_cancellation(tmp_path, monkeypatch, cancel_mode):
         assert summary["skipped"] == 2
     else:
         assert summary == {"total": 3, "clean": 3, "issue": 0, "unprobed": 0, "skipped": 0}
+        assert all(event is probe_events[0] for event in probe_events)
 
     with open_connection(db) as conn:
         recorded = conn.execute(
             "SELECT COUNT(*) FROM reddit_targets WHERE probe_checked_at IS NOT NULL"
         ).fetchone()[0]
     assert recorded == summary["total"]
+
+
+@pytest.mark.parametrize(
+    "max_targets,deadline_seconds,expected_total,expected_skipped",
+    [(2, 180, 2, 1), (50, 100, 1, 2), (0, 0, 3, 0)],
+    ids=["cap", "deadline", "disabled"],
+)
+def test_bulk_probe_pass_budget(
+    tmp_path, monkeypatch, max_targets, deadline_seconds, expected_total, expected_skipped,
+):
+    db = tmp_path / "test.db"
+    posts = [
+        _make_raw_post(f"p{index}", title=f"http://host{index}.example.com/files")
+        for index in range(3)
+    ]
+    with patch("experimental.redseek.service.fetch_posts", return_value=_make_fetch(posts)):
+        result = run_ingest(_make_opts(), db_path=db)
+    assert result.error is None
+    keys = list(result._probe_candidate_keys)
+    assert len(keys) == 3
+
+    monkeypatch.setattr(
+        "gui.utils.sidecar_probe.build_indicator_patterns",
+        lambda _config_path: [],
+    )
+    probe_events = []
+
+    def _fake_probe(_target, **kwargs):
+        probe_events.append(kwargs["cancel_event"])
+        return SidecarProbeOutcome(
+            probe_status="clean",
+            probe_indicator_matches=0,
+            probe_preview=None,
+            probe_checked_at="2026-05-03T10:20:30",
+            probe_error=None,
+        )
+
+    monkeypatch.setattr("gui.utils.sidecar_probe.run_sidecar_probe", _fake_probe)
+    if deadline_seconds == 100:
+        # Start and first completion precede the deadline; second completion exceeds it.
+        ticks = iter([1000.0, 1000.0, 2000.0])
+        monkeypatch.setattr(_svc.time, "monotonic", lambda: next(ticks, 2000.0))
+
+    messages = []
+    summary = _svc._probe_targets_for_keys(
+        keys, db, max_targets=max_targets, deadline_seconds=deadline_seconds,
+        progress_cb=messages.append,
+    )
+    assert summary["total"] == expected_total
+    assert summary["clean"] == expected_total
+    assert summary["skipped"] == expected_skipped
+    assert summary["total"] + summary["skipped"] == 3
+    assert messages[0] == f"Probing {min(max_targets, 3) if max_targets > 0 else 3} targets…"
+    assert probe_events
+    assert all(event is probe_events[0] for event in probe_events)
+    assert probe_events[0].is_set() is (deadline_seconds == 100)
+    if max_targets == 2:
+        assert len(probe_events) == 2
+
+    with open_connection(db) as conn:
+        recorded = conn.execute(
+            "SELECT COUNT(*) FROM reddit_targets WHERE probe_checked_at IS NOT NULL"
+        ).fetchone()[0]
+    assert recorded == expected_total
 
 
 def test_bulk_probe_failure_marks_target_unprobed_without_failing_ingest(tmp_path, monkeypatch):
