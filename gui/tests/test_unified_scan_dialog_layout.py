@@ -242,6 +242,106 @@ def test_unchecked_provider_controls_stay_visible_and_disabled(
         _destroy(root, dialog)
 
 
+def test_shodan_query_grid_has_three_aligned_rows(monkeypatch, tmp_path):
+    """Three protocol rows, each a checkbox + Max + Shodan-query entry, aligned."""
+    overrides = {"unified_scan_dialog.provider_shodan": True}
+    root, dialog = _build_dialog(monkeypatch, tmp_path, overrides)
+    try:
+        root.update()
+        frame = dialog._shodan_opts_frame
+
+        # Single Dorkbook button retained.
+        assert frame._dorkbook_button is not None
+
+        rows = getattr(frame, "_shodan_protocol_rows", [])
+        assert len(rows) == 3
+
+        # Three query entries, mapped to the three new per-protocol query vars.
+        query_entries = [query_entry for (_v, _m, query_entry) in rows]
+        assert len(query_entries) == 3
+        bound_vars = {str(q.cget("textvariable")) for q in query_entries}
+        assert bound_vars == {
+            str(dialog.smb_shodan_query_var),
+            str(dialog.ftp_shodan_query_var),
+            str(dialog.http_shodan_query_var),
+        }
+
+        # Max column and Query column line up across all three protocol rows.
+        max_xs = {max_entry.winfo_rootx() for (_v, max_entry, _q) in rows}
+        query_xs = {query_entry.winfo_rootx() for (_v, _m, query_entry) in rows}
+        assert len(max_xs) == 1, f"Max column not aligned: {max_xs}"
+        assert len(query_xs) == 1, f"Query column not aligned: {query_xs}"
+        # Query column sits to the right of the Max column.
+        assert next(iter(query_xs)) > next(iter(max_xs))
+    finally:
+        _destroy(root, dialog)
+
+
+def test_shodan_per_protocol_greyout(monkeypatch, tmp_path):
+    """Unchecking a protocol greys that row's Max+Query; others stay enabled."""
+    overrides = {"unified_scan_dialog.provider_shodan": True}
+    root, dialog = _build_dialog(monkeypatch, tmp_path, overrides)
+    try:
+        root.update()
+        rows = dialog._shodan_opts_frame._shodan_protocol_rows
+
+        # Provider on + all protocols checked => every row enabled.
+        for (_v, max_entry, query_entry) in rows:
+            assert str(max_entry.cget("state")) == "normal"
+            assert str(query_entry.cget("state")) == "normal"
+
+        # Uncheck SMB (row 0): only that row greys out.
+        smb_var, smb_max, smb_query = rows[0]
+        dialog.protocol_smb_var.set(False)
+        dialog._on_shodan_protocol_toggle()
+        assert str(smb_max.cget("state")) == "disabled"
+        assert str(smb_query.cget("state")) == "disabled"
+        for (_v, max_entry, query_entry) in rows[1:]:
+            assert str(max_entry.cget("state")) == "normal"
+            assert str(query_entry.cget("state")) == "normal"
+
+        # Re-check SMB: its row re-enables.
+        dialog.protocol_smb_var.set(True)
+        dialog._on_shodan_protocol_toggle()
+        assert str(smb_max.cget("state")) == "normal"
+        assert str(smb_query.cget("state")) == "normal"
+    finally:
+        _destroy(root, dialog)
+
+
+def test_shodan_provider_reenable_reapplies_greyout(monkeypatch, tmp_path):
+    """Toggling the provider off->on re-applies per-protocol greying."""
+    overrides = {"unified_scan_dialog.provider_shodan": True}
+    root, dialog = _build_dialog(monkeypatch, tmp_path, overrides)
+    try:
+        root.update()
+        rows = dialog._shodan_opts_frame._shodan_protocol_rows
+        smb_var, smb_max, smb_query = rows[0]
+        ftp_var, ftp_max, ftp_query = rows[1]
+
+        # Uncheck FTP while provider is on.
+        dialog.protocol_ftp_var.set(False)
+        dialog._on_shodan_protocol_toggle()
+        assert str(ftp_max.cget("state")) == "disabled"
+        assert str(smb_max.cget("state")) == "normal"
+
+        # Provider off => provider-level disable greys everything.
+        dialog.provider_shodan_var.set(False)
+        dialog._sync_shodan_options_state()
+        assert str(smb_max.cget("state")) == "disabled"
+        assert str(ftp_max.cget("state")) == "disabled"
+
+        # Provider on again => SMB re-enables, but unchecked FTP stays greyed.
+        dialog.provider_shodan_var.set(True)
+        dialog._sync_shodan_options_state()
+        assert str(smb_max.cget("state")) == "normal"
+        assert str(smb_query.cget("state")) == "normal"
+        assert str(ftp_max.cget("state")) == "disabled"
+        assert str(ftp_query.cget("state")) == "disabled"
+    finally:
+        _destroy(root, dialog)
+
+
 def test_country_and_region_targeting_are_mutually_exclusive(
     monkeypatch,
     tmp_path,

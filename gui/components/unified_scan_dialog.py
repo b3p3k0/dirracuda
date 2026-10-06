@@ -129,6 +129,11 @@ class UnifiedScanDialog:
         self.ftp_max_results_var = tk.StringVar(value="100")
         self.http_max_results_var = tk.StringVar(value="100")
 
+        # Per-protocol Shodan query (inline fields; static prefill from saved dorks)
+        self.smb_shodan_query_var = tk.StringVar(value="")
+        self.ftp_shodan_query_var = tk.StringVar(value="")
+        self.http_shodan_query_var = tk.StringVar(value="")
+
         # Template UI state
         self.template_var = tk.StringVar()
         self._template_label_to_slug: Dict[str, str] = {}
@@ -274,6 +279,17 @@ class UnifiedScanDialog:
             self.smb_max_results_var.set(str(_initial["smb_max_shodan_results_per_scan"]))
             self.ftp_max_results_var.set(str(_initial["ftp_max_shodan_results_per_scan"]))
             self.http_max_results_var.set(str(_initial["http_max_shodan_results_per_scan"]))
+        except Exception:
+            pass
+
+        # Static prefill of per-protocol Shodan queries from saved dorks (Card 2;
+        # reconcile/Dorkbook-apply wiring is Card 3). Missing keys degrade to "".
+        try:
+            from experimental.dorkbook.defaults import read_defaults
+            _dorks = read_defaults(str(self.config_path))
+            self.smb_shodan_query_var.set(_dorks.get("shodan:SMB", ""))
+            self.ftp_shodan_query_var.set(_dorks.get("shodan:FTP", ""))
+            self.http_shodan_query_var.set(_dorks.get("shodan:HTTP", ""))
         except Exception:
             pass
 
@@ -590,13 +606,27 @@ class UnifiedScanDialog:
         return refresh_provider_queue_label(self)
 
     def _sync_shodan_options_state(self, *_args) -> None:
-        from gui.components.scan_provider_options import sync_option_entries
-
-        sync_option_entries(
-            getattr(self, "_shodan_opts_frame", None),
-            self.provider_shodan_var.get(),
+        from gui.components.scan_provider_options import (
+            sync_option_entries,
+            sync_shodan_protocol_states,
         )
+
+        frame = getattr(self, "_shodan_opts_frame", None)
+        enabled = self.provider_shodan_var.get()
+        sync_option_entries(frame, enabled)
+        # The recursive provider-level enable turns every row back on; re-apply the
+        # per-protocol greying so unchecked protocols stay greyed. When disabled the
+        # recursive disable already covers every row.
+        if enabled:
+            sync_shodan_protocol_states(frame)
         self._refresh_provider_queue_label()
+
+    def _on_shodan_protocol_toggle(self) -> None:
+        """Refresh the credit estimate and re-grey rows when a protocol toggles."""
+        from gui.components.scan_provider_options import sync_shodan_protocol_states
+
+        self._refresh_protocol_estimate_lines()
+        sync_shodan_protocol_states(getattr(self, "_shodan_opts_frame", None))
 
     def _sync_searxng_options_state(self, *_args) -> None:
         from gui.components.scan_provider_options import sync_searxng_option_state

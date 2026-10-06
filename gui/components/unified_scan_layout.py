@@ -19,7 +19,7 @@ from gui.utils.window_positions import remember_window_position
 from gui.utils.keybindings import bind_close_shortcuts, bind_submit_shortcuts
 
 
-DEFAULT_GEOMETRY = "960x720"
+DEFAULT_GEOMETRY = "960x800"
 MIN_WIDTH = 840
 MIN_HEIGHT = 680
 
@@ -357,37 +357,48 @@ def _build_provider_section(owner: Any, parent: tk.Widget) -> None:
 
 
 def _build_shodan_options(owner: Any, parent: tk.Widget) -> tk.Frame:
+    # Vertical per-protocol grid (Option A): col 0 = protocol checkbox,
+    # col 1 = Max entry, col 2 = Shodan query entry (stretches). Dorkbook button
+    # sits top-right of the header strip; the estimate row spans the bottom.
     frame = tk.Frame(parent)
     owner.theme.apply_to_widget(frame, "main_window")
+    frame.grid_columnconfigure(2, weight=1)
 
-    protocol_items = (
-        ("SMB", owner.protocol_smb_var, owner.smb_max_results_var),
-        ("FTP", owner.protocol_ftp_var, owner.ftp_max_results_var),
-        ("HTTP", owner.protocol_http_var, owner.http_max_results_var),
-    )
-    for index, (label, selected_var, results_var) in enumerate(protocol_items):
-        column = index * 2
-        check = ttk.Checkbutton(
-            frame,
-            text=label,
-            variable=selected_var,
-            command=owner._refresh_protocol_estimate_lines,
-        )
-        check.grid(row=0, column=column, sticky="w", padx=(0, 4), pady=2)
-        entry = ttk.Entry(frame, textvariable=results_var, width=8)
-        entry.grid(row=0, column=column + 1, sticky="w", padx=(0, 12), pady=2)
+    _muted_label(owner, frame, "Max").grid(row=0, column=1, sticky="w", padx=(0, 8))
+    _muted_label(owner, frame, "Shodan query").grid(row=0, column=2, sticky="w")
 
     dorkbook_button = ttk.Button(
         frame, text="Dorkbook...", width=12, padding=(4, 0),
         command=lambda: open_provider_dorkbook(owner, "shodan"),
     )
-    dorkbook_button.grid(row=0, column=6, sticky="e", pady=2)
+    dorkbook_button.grid(row=0, column=2, sticky="e", pady=(0, 1))
     frame._dorkbook_button = dorkbook_button
-    frame.grid_columnconfigure(6, weight=1)
+
+    protocol_items = (
+        ("SMB", owner.protocol_smb_var, owner.smb_max_results_var, owner.smb_shodan_query_var),
+        ("FTP", owner.protocol_ftp_var, owner.ftp_max_results_var, owner.ftp_shodan_query_var),
+        ("HTTP", owner.protocol_http_var, owner.http_max_results_var, owner.http_shodan_query_var),
+    )
+    protocol_rows = []
+    for index, (label, selected_var, results_var, query_var) in enumerate(protocol_items):
+        row = index + 1
+        check = ttk.Checkbutton(
+            frame,
+            text=label,
+            variable=selected_var,
+            command=owner._on_shodan_protocol_toggle,
+        )
+        check.grid(row=row, column=0, sticky="w", padx=(0, 8), pady=1)
+        max_entry = ttk.Entry(frame, textvariable=results_var, width=8)
+        max_entry.grid(row=row, column=1, sticky="w", padx=(0, 8), pady=1)
+        query_entry = ttk.Entry(frame, textvariable=query_var)
+        query_entry.grid(row=row, column=2, sticky="ew", pady=1)
+        protocol_rows.append((selected_var, max_entry, query_entry))
+    frame._shodan_protocol_rows = protocol_rows
 
     estimate_row = tk.Frame(frame)
     owner.theme.apply_to_widget(estimate_row, "main_window")
-    estimate_row.grid(row=1, column=0, columnspan=7, sticky="ew", pady=0)
+    estimate_row.grid(row=4, column=0, columnspan=3, sticky="ew", pady=0)
     owner._shodan_helper_row = estimate_row
     owner.protocol_cost_label = _muted_label(owner, estimate_row, "")
     owner.protocol_cost_label.pack(side=tk.LEFT)
