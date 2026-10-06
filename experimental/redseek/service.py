@@ -28,7 +28,7 @@ import datetime
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal, Optional
+from typing import Callable, Literal, Optional
 
 from experimental.redseek.client import (
     FetchError,
@@ -216,6 +216,14 @@ def _resolve_probe_limits(options: IngestOptions) -> dict[str, int]:
     return limits
 
 
+def _emit_probe_progress(progress_cb: Optional[Callable[[str], None]], msg: str) -> None:
+    if progress_cb is not None:
+        try:
+            progress_cb(msg)
+        except Exception:
+            pass
+
+
 def _probe_targets_for_keys(
     dedupe_keys: list[str],
     db_path: Optional[Path],
@@ -223,6 +231,7 @@ def _probe_targets_for_keys(
     config_path: Optional[str] = None,
     worker_count: int = 3,
     probe_limits: Optional[dict[str, int]] = None,
+    progress_cb: Optional[Callable[[str], None]] = None,
 ) -> dict[str, int]:
     """Probe current-run concrete targets and persist sidecar probe fields."""
     from gui.utils.sidecar_probe import (
@@ -283,6 +292,7 @@ def _probe_targets_for_keys(
         return counts
 
     try:
+        _emit_probe_progress(progress_cb, f"Probing {len(targets)} targets…")
         with ThreadPoolExecutor(
             max_workers=max_workers,
             thread_name_prefix="reddit-sidecar-probe",
@@ -329,6 +339,12 @@ def _probe_targets_for_keys(
                     counts["clean"] += 1
                 else:
                     counts["unprobed"] += 1
+                _emit_probe_progress(
+                    progress_cb,
+                    f"Probing {counts['total']}/{len(targets)} targets — "
+                    f"{counts['clean']} clean, {counts['issue']} flagged, "
+                    f"{counts['unprobed']} unprobed",
+                )
         conn.commit()
         return counts
     except Exception:
@@ -345,6 +361,8 @@ def _finalize_result_with_optional_probe(
     options: IngestOptions,
     result: IngestResult,
     db_path: Optional[Path],
+    *,
+    progress_cb: Optional[Callable[[str], None]] = None,
 ) -> IngestResult:
     """Apply the explicit bulk probe pass after ingest commits successfully."""
     bulk_probe_enabled = bool(getattr(options, "bulk_probe_enabled", False))
@@ -359,6 +377,7 @@ def _finalize_result_with_optional_probe(
         config_path=getattr(options, "probe_config_path", None),
         worker_count=_resolve_probe_worker_count(options),
         probe_limits=_resolve_probe_limits(options),
+        progress_cb=progress_cb,
     )
     result.probe_total = summary.get("total", 0)
     result.probe_clean = summary.get("clean", 0)
@@ -780,7 +799,12 @@ def _run_search(
 # Public entry point
 # ---------------------------------------------------------------------------
 
-def run_ingest(options: IngestOptions, db_path: Optional[Path] = None) -> IngestResult:
+def run_ingest(
+    options: IngestOptions,
+    db_path: Optional[Path] = None,
+    *,
+    progress_cb: Optional[Callable[[str], None]] = None,
+) -> IngestResult:
     """
     Run one ingestion cycle for the given options.
 
@@ -868,4 +892,6 @@ def run_ingest(options: IngestOptions, db_path: Optional[Path] = None) -> Ingest
         result = _run_new(options, fetch_result, db_path, now_str, replace_cache_done)
     else:
         result = _run_top(options, fetch_result, db_path, now_str, replace_cache_done)
-    return _finalize_result_with_optional_probe(options, result, db_path)
+    return _finalize_result_with_optional_probe(
+        options, result, db_path, progress_cb=progress_cb,
+    )

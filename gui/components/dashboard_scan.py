@@ -769,9 +769,26 @@ def start_reddit_scan(dash, scan_request: dict) -> bool:
     def _worker():
         from experimental.redseek.main_db_sync import sync_targets_to_main_db
         sync_summary: dict = {}
+        _probe_started = False
+
+        def _probe_progress(msg: str) -> None:
+            nonlocal _probe_started
+            first_message = not _probe_started
+            _probe_started = True
+
+            def _dispatch(m=msg, first=first_message):
+                if first:
+                    _call_dashboard_hook(dash, "_log_status_event", m)
+                if _reddit_only:
+                    _call_dashboard_hook(dash, "_update_progress_summary", "Reddit", m)
+            try:
+                dash.parent.after(0, _dispatch)
+            except Exception:
+                pass
+
         try:
             _ui_log("Fetching Reddit posts...")
-            result = run_ingest(options, db_path=db_path)
+            result = run_ingest(options, db_path=db_path, progress_cb=_probe_progress)
         except Exception as exc:
             from experimental.redseek.service import IngestResult
             result = IngestResult(

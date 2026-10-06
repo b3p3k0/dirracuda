@@ -875,7 +875,7 @@ class TestStartRedditScan:
         dash = _make_dash()
         captured = []
 
-        def _fake_run(options, db_path=None):
+        def _fake_run(options, db_path=None, *, progress_cb=None):
             captured.append(options)
             return _make_reddit_result()
 
@@ -904,7 +904,7 @@ class TestStartRedditScan:
         dash = _make_dash()
         captured = []
 
-        def _fake_run(options, db_path=None):
+        def _fake_run(options, db_path=None, *, progress_cb=None):
             captured.append(options)
             return _make_reddit_result()
 
@@ -924,7 +924,7 @@ class TestStartRedditScan:
         dash = _make_dash()
         errors = []
 
-        def _fake_run(options, db_path=None):
+        def _fake_run(options, db_path=None, *, progress_cb=None):
             raise AssertionError("run_ingest should not be called for unsupported user mode")
 
         monkeypatch.setattr("experimental.redseek.service.run_ingest", _fake_run)
@@ -945,7 +945,7 @@ class TestStartRedditScan:
         dash = _make_dash()
         captured = []
 
-        def _fake_run(options, db_path=None):
+        def _fake_run(options, db_path=None, *, progress_cb=None):
             captured.append(options)
             return _make_reddit_result()
 
@@ -967,7 +967,7 @@ class TestStartRedditScan:
         dash = _make_dash()
         captured = []
 
-        def _fake_run(options, db_path=None):
+        def _fake_run(options, db_path=None, *, progress_cb=None):
             captured.append(options)
             return _make_reddit_result()
 
@@ -990,7 +990,7 @@ class TestStartRedditScan:
         dash.settings_manager = sm
         captured = []
 
-        def _fake_run(options, db_path=None):
+        def _fake_run(options, db_path=None, *, progress_cb=None):
             captured.append(options)
             return _make_reddit_result()
 
@@ -1241,7 +1241,7 @@ class TestStartRedditScanPrimaryDB:
         dash = _make_dash()
         captured_db: list = []
 
-        def _fake_run(options, db_path=None):
+        def _fake_run(options, db_path=None, *, progress_cb=None):
             captured_db.append(db_path)
             return _make_reddit_result()
 

@@ -618,6 +618,59 @@ def test_bulk_probe_copies_snapshot_for_concrete_targets_and_skips_unknown(tmp_p
     assert unknown_row["probe_snapshot_json"] is None
 
 
+def test_bulk_probe_progress_matches_summary(tmp_path, monkeypatch):
+    db = tmp_path / "test.db"
+    statuses = {
+        "clean.example.com": "clean",
+        "issue.example.com": "issue",
+        "unprobed.example.com": "unprobed",
+    }
+    posts = [
+        _make_raw_post(f"p{index}", title=f"http://{host}/files")
+        for index, host in enumerate(statuses)
+    ]
+    with patch("experimental.redseek.service.fetch_posts", return_value=_make_fetch(posts)):
+        result = run_ingest(_make_opts(), db_path=db)
+    assert result.error is None
+    keys = list(result._probe_candidate_keys)
+
+    monkeypatch.setattr(
+        "gui.utils.sidecar_probe.build_indicator_patterns",
+        lambda _config_path: [],
+    )
+
+    def _fake_probe(target, **_kwargs):
+        status = statuses[target.host]
+        return SidecarProbeOutcome(
+            probe_status=status,
+            probe_indicator_matches=int(status == "issue"),
+            probe_preview=None,
+            probe_checked_at="2026-05-03T10:20:30",
+            probe_error=None,
+        )
+
+    monkeypatch.setattr("gui.utils.sidecar_probe.run_sidecar_probe", _fake_probe)
+    messages = []
+    summary = _svc._probe_targets_for_keys(keys, db, progress_cb=messages.append)
+
+    assert summary == {"total": 3, "clean": 1, "issue": 1, "unprobed": 1, "skipped": 0}
+    assert messages[0] == "Probing 3 targets…"
+    assert len(messages) == summary["total"] + 1
+    done_counts = [int(msg.split()[1].split("/")[0]) for msg in messages[1:]]
+    assert done_counts == sorted(done_counts)
+    assert done_counts == [1, 2, 3]
+    assert messages[-1] == (
+        f"Probing {summary['total']}/3 targets — {summary['clean']} clean, "
+        f"{summary['issue']} flagged, {summary['unprobed']} unprobed"
+    )
+    assert _svc._probe_targets_for_keys(keys, db, progress_cb=None) == summary
+
+    def _raise_progress(_msg):
+        raise RuntimeError("progress boom")
+
+    assert _svc._probe_targets_for_keys(keys, db, progress_cb=_raise_progress) == summary
+
+
 def test_bulk_probe_failure_marks_target_unprobed_without_failing_ingest(tmp_path, monkeypatch):
     db = tmp_path / "test.db"
     posts = [_make_raw_post("p1", title="ftp://example.com/pub")]
