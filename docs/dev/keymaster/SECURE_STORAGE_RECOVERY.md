@@ -188,3 +188,21 @@ passed. All three cards are accepted; no Blocker or Required findings remain.
 This is acceptance of the recovery controls and storage safeguards, not a claim
 to have reproduced or diagnosed the original password rejection. HI review
 before merge remains recommended for the changed security workflow.
+
+## KSR4 — blank unlock dialog after relaunch
+
+HI reported that double-clicking a saved key in locked Keymaster opens a blank
+Unlock Keymaster dialog. The traceback identifies grab_set before the window is
+viewable; it also runs before any form controls are built. Correct the lifecycle
+to build the form, wait for visibility, then acquire the grab and set focus.
+Exercise setup and unlock with delayed mapping, plus reopen/two saved keys/
+double-click/unlock/apply. If that path retains a locked row snapshot after
+unlock, reload the selected key before Apply. Cancellation must not apply a key
+or leave an orphan dialog. No store, passphrase, schema, or cryptography change.
+
+Validation: failure-first real Tk regression, existing Keymaster headless and
+rendered tests, dialog/theme/messagebox guardrails, and setup/unlock layout audit.
+Use synthetic temporary stores/configs; do not touch HI's two saved keys. A
+distinct RA reviews the patch and owns the acceptance commit. Rollback is a new
+revert commit, never a history rewrite. This focused follow-up is authorized by
+HI's regression report within the accepted recovery/UI work.
