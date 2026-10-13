@@ -881,7 +881,7 @@ def test_auto_check_toggle_persists_setting(monkeypatch):
     assert win._status_var.set.call_args_list[-1].args[0] == "Auto check disabled."
 
 
-def test_unlock_session_retries_after_invalid_passphrase(monkeypatch, tmp_path):
+def test_unlock_session_allows_explicit_retry_after_invalid_passphrase(monkeypatch, tmp_path):
     db_path = tmp_path / "km.db"
     from experimental.keymaster import store as km_store
 
@@ -902,16 +902,18 @@ def test_unlock_session_retries_after_invalid_passphrase(monkeypatch, tmp_path):
         lambda *a, **kw: errors.append((a, kw)),
     )
 
-    ok = win._unlock_session(startup=False)
+    assert win._unlock_session() is False
+    assert win._session_keys is None
+    ok = win._unlock_session()
 
     assert ok is True
     assert win._session_keys is not None
     assert win._ask_passphrase.call_count == 2
     assert len(errors) == 1
-    assert "Invalid passphrase." in errors[0][0][1]
+    assert "Incorrect passphrase." in errors[0][0][1]
 
 
-def test_forgot_passphrase_reset_clears_sidecar_and_reinitializes(monkeypatch, tmp_path):
+def test_forgot_passphrase_reset_clears_sidecar_and_stays_off(monkeypatch, tmp_path):
     db_path = tmp_path / "km.db"
     from experimental.keymaster import store as km_store
 
@@ -939,13 +941,13 @@ def test_forgot_passphrase_reset_clears_sidecar_and_reinitializes(monkeypatch, t
 
     assert int(count) == 0
     assert configured is False
-    assert secure_enabled is True
+    assert secure_enabled is False
     assert win._session_keys is None
-    win._initialize_security_session.assert_called_once()
+    win._initialize_security_session.assert_not_called()
     win._load_entries.assert_called_once()
 
 
-def test_secure_mode_toggle_disable_converts_and_clears_session(monkeypatch, tmp_path):
+def test_delete_and_disable_removes_keys_and_clears_session(monkeypatch, tmp_path):
     db_path = tmp_path / "km.db"
     from experimental.keymaster import store as km_store
 
@@ -959,15 +961,13 @@ def test_secure_mode_toggle_disable_converts_and_clears_session(monkeypatch, tmp
     win._session_keys = unlocked
     win._status_var = MagicMock()
     win._load_entries = MagicMock()
-    win._secure_mode_var = MagicMock()
-    win._secure_mode_var.get.return_value = False
 
     monkeypatch.setattr(
         "gui.components.keymaster_window.messagebox.askyesno",
         lambda *a, **kw: True,
     )
 
-    win._on_secure_mode_toggled()
+    win._on_forgot_passphrase_reset()
 
     with km_store.open_connection(db_path) as conn:
         secure_enabled = km_store.secure_mode_enabled(conn)
@@ -978,8 +978,7 @@ def test_secure_mode_toggle_disable_converts_and_clears_session(monkeypatch, tmp
 
     assert secure_enabled is False
     assert encrypted == 0
-    assert row is not None
-    assert str(row["api_key"] or "") == "SECUREKEY"
+    assert row is None
     assert win._secure_mode_enabled is False
     assert win._session_keys is None
     win._load_entries.assert_called_once()

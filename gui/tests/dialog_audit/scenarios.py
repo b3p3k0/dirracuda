@@ -41,7 +41,9 @@ for name, module, owner, expected in [
     ("dorkbook", "dorkbook_window", "DorkbookWindow.__init__", ("Add",)),
     ("dorkbook-edit", "dorkbook_window", "_EntryEditorDialog.__init__", ("Save", "Cancel")),
     ("dorkbook-delete", "dorkbook_window", "_DeleteConfirmDialog.__init__", ("Delete", "Cancel")),
-    ("keymaster", "keymaster_window", "KeymasterWindow.__init__", ("Add",)),
+    ("keymaster", "keymaster_window", "KeymasterWindow.__init__", ("Add", "Set passphrase…", "Delete all keys and disable…")),
+    ("keymaster-setup", "keymaster_security", "PassphraseDialog.__init__", ("Set passphrase", "Confirm passphrase", "Show passphrase", "Cancel")),
+    ("keymaster-unlock", "keymaster_security", "PassphraseDialog.__init__", ("Unlock", "Show passphrase", "Cancel")),
     ("keymaster-edit", "keymaster_window", "_KeyEditorDialog.__init__", ("Save", "Cancel")),
     ("keymaster-delete", "keymaster_window", "_SimpleDeleteConfirmDialog.__init__", ("Delete", "Cancel")),
     ("probe-config", "scan_preflight", "ProbeConfigDialog.show", ("Save & Continue", "Abort Scan")),
@@ -152,6 +154,7 @@ def build(case, env):
     if name == "dorkbook-edit": return module._EntryEditorDialog(root, theme, title="Edit Dork", nickname="Example listing", query='intitle:"index of /"', editing=True)
     if name == "dorkbook-delete": return module._DeleteConfirmDialog(root, theme, prompt_text="Delete Example listing?")
     if name == "keymaster": return module.KeymasterWindow(root, settings_manager=settings, db_path=env.paths.keymaster_db_file, config_path=env.config)
+    if name in {"keymaster-setup", "keymaster-unlock"}: return module.PassphraseDialog(root, theme, setup=name == "keymaster-setup")
     if name == "keymaster-edit": return module._KeyEditorDialog(root, theme, title="Edit key", label="Audit fixture", api_key="test-key")
     if name == "keymaster-delete": return module._SimpleDeleteConfirmDialog(root, theme, label_text="Audit fixture")
     if name == "probe-config": return module.ProbeConfigDialog(root, theme, settings).show()

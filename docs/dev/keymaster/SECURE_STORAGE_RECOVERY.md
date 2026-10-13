@@ -85,3 +85,21 @@ must say what it removes before confirmation. No automated backup of secrets.
   `git diff --check` passed. Desktop behavior remains unchanged until KSR2;
   runtime docs and visual checks close in KSR3. HI review is recommended before
   merging this secrets-related change.
+- KSR2 accepted by separate RA on 2026-10-13. Security controls now live in
+  `gui/components/keymaster_security.py`: explicit status/actions replace the
+  checkbox and automatic prompts. Reset stays off, clears session/rows/credit
+  caches, and invalidates prior refresh completions. In-flight requests for the
+  current key may finish; their results cannot repopulate the cleared cache.
+  `validate_session_keys` is the public store check used before cached-key
+  actions. No remaining callers use the former private name.
+- RA validation: `xvfb-run -a ./venv/bin/python -m pytest -q
+  shared/tests/test_keymaster_store.py shared/tests/test_keymaster_recovery.py
+  gui/tests/test_keymaster_window.py gui/tests/test_keymaster_security.py
+  gui/tests/test_keymaster_security_rendered.py gui/tests/test_dialog_audit.py
+  gui/tests/test_theme_style_guardrail.py gui/tests/test_messagebox_guardrail.py`
+  → **125 passed in 18.84s**. DA dialog audit reported **18 results, 0 failed,
+  0 uncovered**; RA inspected desktop-light and large-text-dark setup images.
+  Fields, visibility control, and action buttons remain legible with scrolling.
+  Real Tk regressions cover initial focus, grab, cancellation, and exact input.
+  No Blocker or Required findings remain for this card. KSR3 owns the remaining
+  runtime-entrypoint exercise and behavior-documentation closeout.

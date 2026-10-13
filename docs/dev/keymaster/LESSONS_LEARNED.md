@@ -41,3 +41,12 @@ Status: initial seed; append during implementation
 - Separate RA review of KSR1 confirmed rollback through injected partial
   writes and stale-session rejection across connections; the original reported
   password rejection has not been reproduced.
+- Storage policy and operation feedback need separate labels. Explicit setup,
+  unlock, enable, and destructive-disable actions remove the ambiguity of a
+  checkbox that prompts for a password while trying to turn protection off.
+- Discard late background results by generation when deleting cached data.
+  Clearing the visible rows alone does not stop a pending completion from
+  restoring stale credit results.
+- Test real Tk focus and confirmation fields, not just mocked dialog returns.
+  Xvfb coverage caught initial focus landing on the Toplevel instead of the
+  passphrase entry during this card.

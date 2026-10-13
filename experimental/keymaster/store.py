@@ -495,7 +495,8 @@ def encrypted_row_count(conn: sqlite3.Connection) -> int:
     return int(row[0])
 
 
-def _require_secure_session(conn: sqlite3.Connection, session_keys: Optional[dict[str, bytes]]) -> dict[str, bytes]:
+def validate_session_keys(conn: sqlite3.Connection, session_keys: Optional[dict[str, bytes]]) -> dict[str, bytes]:
+    """Validate session ownership before using cached credentials or writing keys."""
     metadata = _read_passphrase_metadata(conn)
     if metadata is None:
         raise PassphraseRequiredError("Keymaster passphrase is required")
@@ -612,7 +613,7 @@ def create_key(
 
     _begin_write(conn)
     if secure_mode_enabled(conn):
-        keys = _require_secure_session(conn, session_keys)
+        keys = validate_session_keys(conn, session_keys)
         fingerprint = _build_fingerprint(key_norm, keys["fingerprint_key"])
         if key_exists(conn, provider_norm, fingerprint):
             raise DuplicateKeyError(
@@ -675,7 +676,7 @@ def get_key(
     if row is None:
         return None
     if session_keys and row["is_encrypted"]:
-        _require_secure_session(conn, session_keys)
+        validate_session_keys(conn, session_keys)
     return _row_to_key_dict(row, session_keys=session_keys)
 
 
@@ -705,7 +706,7 @@ def update_key(
     provider_norm = str(existing_row["provider"] if isinstance(existing_row, sqlite3.Row) else existing_row[0])
 
     if secure_mode_enabled(conn):
-        keys = _require_secure_session(conn, session_keys)
+        keys = validate_session_keys(conn, session_keys)
         fingerprint = _build_fingerprint(key_norm, keys["fingerprint_key"])
         if key_exists(conn, provider_norm, fingerprint, exclude_key_id=key_id):
             raise DuplicateKeyError(
@@ -802,7 +803,7 @@ def list_keys(
         ).fetchall()
 
     if session_keys and any(row["is_encrypted"] for row in rows):
-        _require_secure_session(conn, session_keys)
+        validate_session_keys(conn, session_keys)
     return [_row_to_key_dict(row, session_keys=session_keys) for row in rows]
 
 
@@ -821,7 +822,7 @@ def migrate_legacy_plaintext_rows(
 ) -> int:
     """Encrypt any legacy plaintext rows in-place and return converted count."""
     _begin_write(conn)
-    keys = _require_secure_session(conn, session_keys)
+    keys = validate_session_keys(conn, session_keys)
     rows = conn.execute(
         """
         SELECT key_id, api_key
@@ -869,7 +870,7 @@ def migrate_rows_to_plaintext(
 ) -> int:
     """Decrypt all encrypted rows in-place and return converted count."""
     _begin_write(conn)
-    keys = _require_secure_session(conn, session_keys)
+    keys = validate_session_keys(conn, session_keys)
     rows = conn.execute(
         """
         SELECT key_id, key_ciphertext
@@ -938,7 +939,7 @@ def switch_secure_mode(
         target_enabled = bool(enabled)
         converted = 0
         if target_enabled:
-            _require_secure_session(conn, session_keys)
+            validate_session_keys(conn, session_keys)
             set_secure_mode(conn, True)
             return migrate_legacy_plaintext_rows(conn, session_keys=session_keys or {})
 
