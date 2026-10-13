@@ -142,6 +142,7 @@ class KeymasterSecurityMixin:
         status.pack(fill=tk.X)
         wrap_label(status, panel)
         actions = tk.Frame(panel)
+        self._security_actions = actions
         self.theme.apply_to_widget(actions, "main_window")
         actions.pack(fill=tk.X, pady=(4, 0))
         self._security_action_btn = tk.Button(actions, command=self._on_security_action)
@@ -192,6 +193,9 @@ class KeymasterSecurityMixin:
         ))
         self._security_action_btn.configure(text=labels[state], state=tk.DISABLED if state == "Unlocked" else tk.NORMAL)
         self._reset_btn.configure(state=tk.NORMAL)
+        if hasattr(self, "_security_actions"):
+            # flow_row must remeasure when text changes without a frame resize.
+            self._security_actions.event_generate("<Configure>", when="tail")
 
     def _ask_passphrase(self, *, setup=False):
         return PassphraseDialog(self.window, self.theme, setup=setup).show()

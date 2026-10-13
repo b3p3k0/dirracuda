@@ -131,7 +131,7 @@ sidecar SQLite databases under `~/.dirracuda/data/experimental/`.
 |---------|-------------|-----|-------|
 | Web UI | `experimental/webui/server.py` | config/state | FastAPI companion; cookie sessions, CSRF protection; remote mode requires TLS + allowlist |
 | Dorkbook | `experimental/dorkbook/store.py` | sidecar | Unified Shodan/Self-hosted Search dork library; shared saved defaults, read-only built-ins + user customs |
-| Keymaster | `experimental/keymaster/store.py` | sidecar | Multi-key API key store; selecting a key updates active Shodan key in memory |
+| Keymaster | `experimental/keymaster/store.py` | sidecar | Multi-key API key store; Apply persists the Shodan key. Desktop security controls live in `gui/components/keymaster_security.py`: explicit setup/unlock, no opening prompt, confirmed password-free Delete all keys and disable (all providers, storage stays off). Setup/reset are atomic; validate session ownership before using cached credentials. |
 | Redseek | `experimental/redseek/service.py` | **primary** | Reddit ingestion via anonymous RSS feed/search only; new runs write to primary DB, auto-sync SMB/FTP/HTTP targets; legacy data in `reddit_od.db` |
 | Self-hosted Search | `experimental/se_dork/service.py` | **primary** | SearXNG/DeGoog dork search; two-commit transaction model; auto-sync to primary protocol tables |
 | Censys Discovery | `experimental/censys_discovery/service.py` | sidecar | Censys Platform v3 alternative discovery; requires org-scoped PAT. **Suspended** — free-tier API does not provide candidate-list endpoints required for in-app runs. |

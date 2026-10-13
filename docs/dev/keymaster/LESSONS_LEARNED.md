@@ -50,3 +50,10 @@ Status: initial seed; append during implementation
 - Test real Tk focus and confirmation fields, not just mocked dialog returns.
   Xvfb coverage caught initial focus landing on the Toplevel instead of the
   passphrase entry during this card.
+- Audit transitions as well as opening states. The real-entrypoint exercise
+  caught a clipped Enable secure storage label after reset even though static
+  setup screenshots passed. Reflow action rows when their text changes, and
+  compare allocated widths with requested widths in real Tk tests.
+- Keep verification claims bounded: this effort used Linux/Xvfb, synthetic
+  stores, automated Tk interactions, and screenshot inspection. It did not
+  reset the live store or establish the cause of the original password report.

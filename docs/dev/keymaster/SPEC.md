@@ -1,7 +1,9 @@
 # Keymaster v1 Spec
 
 Date: 2026-04-25
-Status: Approved by HI for implementation planning
+Status: historical v1 scope. Current security behavior and superseding recovery
+decisions are in [SECURE_STORAGE_RECOVERY.md](SECURE_STORAGE_RECOVERY.md);
+current runtime paths and provider details are in [the technical reference](../../TECHNICAL_REFERENCE.md).
 
 ## Problem
 

@@ -1264,14 +1264,16 @@ Dashboard -> Accessories tab -> Open Keymaster
 Keymaster secure-storage behavior:
 
 - Secure storage policy defaults to enabled and is persisted in sidecar metadata.
-- First secure-mode run requires a dedicated Keymaster passphrase setup.
+- Desktop opening reads state without prompting: Off, Setup needed, Locked, or Unlocked; malformed/unreadable storage shows Storage problem. Explicit Set passphrase/Enable secure storage and Unlock actions open masked forms with visibility toggles. Setup includes confirmation in the same form; exact input is preserved.
 - PBKDF2-HMAC-SHA256 derives the root key with 600,000 iterations and a random 32-byte salt. HMAC purpose labels derive separate encryption and fingerprint subkeys.
 - AES-GCM encrypts API keys. A keyed HMAC-SHA256 fingerprint supports equality checks and duplicate rejection without storing the fingerprint key.
 - The fingerprint is deterministic within one unlocked store, so equal saved keys have equal fingerprints. That limited equality leak is intentional; the value is never returned to either UI.
-- Successful unlock derives per-session keys and unlocks once for the app session.
+- Successful unlock derives per-session keys for the Keymaster window. Closing clears the window's keys; reopening requires explicit unlock. Session root and subkeys are checked against current metadata before writes and cached-key actions, so pre-reset sessions cannot encrypt new entries under an obsolete key.
 - Legacy plaintext sidecar rows are migrated in place after successful setup/unlock.
-- `Forgot Passphrase / Reset` is intentionally destructive: it clears stored rows plus passphrase metadata, then reinitializes secure mode.
-- Explicit secure-mode opt-out is available in-window; opt-out converts encrypted rows back to plaintext for compatibility with the selected policy.
+- `Delete all keys and disable…` confirms deletion of every provider's rows and passphrase metadata, requires no password, and persists secure storage off. It clears window session/row/credit caches and invalidates late credit-check results; an already-started request may finish. Applied configuration credentials and backups remain. This is logical deletion, not forensic erasure.
+- Setup cannot overwrite existing or partial passphrase metadata, or orphan encrypted rows. Legacy off-mode stores retaining metadata require explicit reset before fresh setup. Fresh enable encrypts any plaintext entries with the new passphrase in one transaction.
+- Store security operations use savepoints without committing caller work. `destructive_reset(conn, *, secure_mode)` requires an explicit resulting policy; desktop passes `False`. `enable_secure_storage(conn, passphrase)` returns `(session_keys, converted_count)`. `validate_session_keys(conn, session_keys)` checks current ownership. Existing `switch_secure_mode` remains a store conversion API, with no desktop preserve-as-plaintext action.
+- Missing setup, password mismatch, malformed metadata, and storage errors have distinct safe desktop messages. Metadata work factors must be within 100,000–1,000,000 PBKDF2 iterations; generated stores still use 600,000. No schema or cryptographic algorithm change accompanies the recovery controls.
 
 CodeQL alert #23 classifies the API key passed to the fingerprint HMAC as a password sent to a fast hash. The operation is keyed duplicate detection, not password storage: the HMAC key is domain-separated from the AES-GCM key, exists only after passphrase unlock, and is not persisted. The construction follows [HMAC](https://www.rfc-editor.org/info/rfc2104); passphrase derivation follows [PBKDF2](https://www.rfc-editor.org/info/rfc8018). Changing either algorithm to satisfy the alert would weaken or obscure the design, so the alert is handled as a documented false positive.
 

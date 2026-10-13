@@ -593,15 +593,13 @@ before migration. See [upgrade/recovery](docs/dev/dorkbook/U1_VALIDATION.md) and
 
 ### Keymaster
 
-![keymaster](img/keymaster.png)
-
 Keymaster stores reusable Shodan API keys for rapid key rotation during testing.
 
 Quick start:
 1. Dashboard → `⚗ Accessories` → `Keymaster` tab.
 2. Click `Open Keymaster`.
-3. On first secure-mode use, set a dedicated Keymaster passphrase.
-4. Unlock once per app session.
+3. At `Setup needed`, choose `Set passphrase…` and enter a dedicated Keymaster passphrase twice.
+4. When reopening Keymaster, choose `Unlock…`. Opening the window does not prompt automatically.
 5. Add one or more keys with a label, API key, and optional notes.
 6. Select a key and click `Apply` (or double-click the row, or use the right-click menu).
 
@@ -612,11 +610,12 @@ What Apply does:
 Sidecar DB path: `~/.dirracuda/data/experimental/keymaster.db`
 
 Storage behavior:
-- Secure storage is enabled by default.
-- Key material is encrypted at rest in Keymaster sidecar storage.
-- Existing legacy plaintext rows are auto-migrated on successful unlock/setup.
-- If you disable secure storage in the Keymaster window, existing encrypted rows are converted back to plaintext in the sidecar DB.
-- `Forgot Passphrase / Reset` is destructive by design: it clears Keymaster rows and passphrase metadata so secure mode can be reinitialized.
+- The status reads `Off`, `Setup needed`, `Locked`, or `Unlocked`. New stores start at `Setup needed`; a storage error shows `Storage problem` with a retry action.
+- Secure storage encrypts saved key material at rest. Existing plaintext entries are encrypted on successful setup/unlock.
+- Setup and unlock preserve spaces and capitalization. Both forms offer `Show passphrase`; setup includes confirmation in the same form.
+- To start over, choose `Delete all keys and disable…` and confirm. This requires **no old passphrase**, deletes every saved Keymaster entry (including Analyst LLM tokens), removes the passphrase, and leaves storage **off**.
+- With storage off, newly saved keys are plaintext. Choose `Enable secure storage…` to set a fresh passphrase and encrypt them. Old opt-out stores that retain passphrase metadata must be reset before fresh setup.
+- Reset does not clear credentials already applied to configuration or remove backups. It is application-level deletion, not secure disk erasure.
 
 Key table columns: `Label`, `Key Preview`, `Query Credits`, `Notes`, `Last Used`.
 
@@ -766,7 +765,7 @@ Notes:
 - Root `/scans` and `/extras` are intentionally not registered and return 404.
 - Queue state is shared and survives page navigation/refresh.
 - Dorkbook `Apply to Search` saves provider-specific defaults immediately.
-- Keymaster `apply` writes `shodan.api_key`; secure-mode toggle/reset stays desktop-only for now.
+- Keymaster `apply` writes `shodan.api_key`; storage setup and delete-and-disable stay desktop-only.
 
 Remote access requires `remote_enabled=true`, a matching CIDR allowlist, and TLS
 or the explicit insecure override. If remote access is enabled while the bind is

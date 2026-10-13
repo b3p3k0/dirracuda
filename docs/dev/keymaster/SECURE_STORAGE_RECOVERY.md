@@ -1,6 +1,6 @@
 # Keymaster secure storage recovery
 
-Status: approved by HI for implementation, 2026-10-13.
+Status: KSR1–KSR3 implemented and accepted by a separate RA, 2026-10-13.
 Track: full process. PA/DA: primary session. RA: separate reviewer.
 
 ## Goal and evidence
@@ -103,3 +103,88 @@ must say what it removes before confirmation. No automated backup of secrets.
   Real Tk regressions cover initial focus, grab, cancellation, and exact input.
   No Blocker or Required findings remain for this card. KSR3 owns the remaining
   runtime-entrypoint exercise and behavior-documentation closeout.
+
+## KSR3 final validation (DA)
+
+The automated runtime exercise exposed a state-transition layout issue missed
+by the initial-state screenshots: changing Set passphrase to Enable secure
+storage did not remeasure the action row. The follow-up explicitly schedules
+row layout on security-state rendering. Real Tk tests now compare allocated and
+requested button widths across all five states; the audit includes transition
+to Off. No previously accepted commits were rewritten.
+
+Final combined command, after the layout follow-up:
+
+```bash
+xvfb-run -a ./venv/bin/python -m pytest -q \
+  shared/tests/test_keymaster_store.py \
+  shared/tests/test_keymaster_recovery.py \
+  shared/tests/test_analyst_n3_credentials.py \
+  experimental/webui/tests/test_keymaster_routes.py \
+  gui/tests/test_keymaster_window.py \
+  gui/tests/test_keymaster_security.py \
+  gui/tests/test_keymaster_security_rendered.py \
+  gui/tests/test_dialog_audit.py \
+  gui/tests/test_theme_style_guardrail.py \
+  gui/tests/test_messagebox_guardrail.py \
+  gui/tests/test_experimental_features_dialog.py \
+  gui/tests/test_dashboard_experimental_sidecar.py
+```
+
+Output: **267 passed, 1 warning in 30.49s**. The warning is the existing
+Starlette/httpx deprecation; no dependency changes were made.
+
+```bash
+./venv/bin/python scripts/run_dialog_audit.py \
+  --scenario keymaster,keymaster-off,keymaster-setup,keymaster-unlock \
+  --theme both --output /tmp/dirracuda-keymaster-recovery-audit-final
+```
+
+Output: **24 results; 0 failed; 0 uncovered**. DA inspected the updated Off
+screenshots, including large-text dark mode. Controls are legible and setup
+content remains accessible by scrolling.
+
+Actual entrypoint exercise: subprocess argument list
+`['xvfb-run', '-a', './dirracuda', '--mock', '--backend-path', '/home/kevin/DEV/dirracuda']`.
+Temporary `sitecustomize.py` instrumentation redirected `get_paths()` to
+disposable config/databases, blocked socket connections, and made background
+workers inert. Tk callbacks entered synthetic passphrases and invoked controls.
+This was an **automated runtime exercise plus screenshot inspection**, not an
+unaided manual run on HI's desktop. Output, exit 0:
+
+```text
+PASS: ./dirracuda mock runtime; setup cancellation, reset cancellation, password-free disable, enable, reopen, wrong/correct unlock, focus, reveal, and populated reset
+```
+
+Ephemeral artifacts/harness: `/tmp/dirracuda-keymaster-runtime-final-ld7bsq45/`.
+The final run also asserted Enable secure storage's allocated width meets its
+requested width. `git diff --check` returned no output (exit 0).
+
+Limits: Linux/Xvfb only; no live provider calls, live-store reset, forensic
+erasure validation, or reproduction of the original password rejection.
+Applied configuration credentials remain outside reset scope. HI should review
+the changed security workflow before merge. Nothing was pushed.
+
+## Final RA acceptance
+
+KSR3 accepted on 2026-10-13, including the focused layout follow-up discovered
+through the real entrypoint. RA reviewed the docs against runtime, inspected the
+isolated harness and final Off screenshot, and verified the action label fits.
+The earlier initial-state audit did not cover this transition; the expanded
+audit and five-state bounds regression now do.
+
+Independent command:
+
+```bash
+xvfb-run -a ./venv/bin/python -m pytest -q \
+  gui/tests/test_keymaster_security_rendered.py \
+  gui/tests/test_dialog_audit.py \
+  experimental/webui/tests/test_keymaster_routes.py \
+  shared/tests/test_analyst_n3_credentials.py
+```
+
+Output: **69 passed, 1 existing warning in 13.16s**. Final diff whitespace check
+passed. All three cards are accepted; no Blocker or Required findings remain.
+This is acceptance of the recovery controls and storage safeguards, not a claim
+to have reproduced or diagnosed the original password rejection. HI review
+before merge remains recommended for the changed security workflow.

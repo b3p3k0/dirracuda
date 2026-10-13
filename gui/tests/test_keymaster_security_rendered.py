@@ -8,6 +8,7 @@ from experimental.keymaster import store as km
 from gui.components.keymaster_security import PassphraseDialog
 from gui.components.keymaster_window import KeymasterWindow
 from gui.utils.style import get_theme
+from gui.tests.dialog_audit.inspect import measure
 
 
 @pytest.fixture
@@ -53,6 +54,17 @@ def test_open_setup_cancel_delete_enable_reopen(ui, monkeypatch):
     assert reopened._security_action_btn.cget("text") == "Unlock…"
     with km.open_connection(db_path) as conn:
         km.unlock_session_keys(conn, "  synthetic typed phrase  ")
+
+
+@pytest.mark.parametrize("state", ["Off", "Locked", "Unlocked", "Storage problem", "Setup needed"])
+def test_security_action_reflows_when_state_text_changes(ui, state):
+    root, window = ui
+    window._security_state = state
+    window._refresh_security_controls()
+    root.update()
+    button = window._security_action_btn
+    assert button.winfo_width() >= button.winfo_reqwidth()
+    assert not measure(window.window)["findings"]
 
 
 @pytest.mark.parametrize("setup", [False, True])
