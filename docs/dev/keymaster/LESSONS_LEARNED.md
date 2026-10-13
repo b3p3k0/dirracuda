@@ -27,3 +27,17 @@ Status: initial seed; append during implementation
 1. Plaintext key storage is practical for local tooling but has local-machine exposure risk.
 2. Config path resolution drift can cause "applied key to wrong config" if not tested.
 3. Duplicated persistence helpers across modules can reintroduce config overwrite bugs.
+
+## Secure storage recovery — 2026-10-13
+
+- Recovery must not require the secret being recovered from. Reset has an
+  explicit resulting mode and deletes every provider and passphrase metadata
+  in one caller-owned transaction.
+- Session key shape is insufficient validation. Check current passphrase
+  ownership and derived subkeys before encrypted reads or writes; reset and
+  reconfiguration invalidate previously unlocked sessions.
+- Numeric metadata needs a work bound as well as a type check. Reject damaged
+  KDF iteration values before starting expensive derivation.
+- Separate RA review of KSR1 confirmed rollback through injected partial
+  writes and stale-session rejection across connections; the original reported
+  password rejection has not been reproduced.

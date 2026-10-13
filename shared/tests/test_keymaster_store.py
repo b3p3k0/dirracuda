@@ -257,7 +257,7 @@ def test_destructive_reset_clears_rows_and_passphrase_metadata(tmp_db):
         conn.commit()
 
     with km_store.open_connection(tmp_db) as conn:
-        km_store.destructive_reset(conn)
+        km_store.destructive_reset(conn, secure_mode=True)
         conn.commit()
         row_count = conn.execute("SELECT COUNT(*) AS n FROM keymaster_keys").fetchone()["n"]
         configured = km_store.passphrase_is_configured(conn)

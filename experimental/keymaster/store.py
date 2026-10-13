@@ -18,6 +18,7 @@ import hmac
 import json
 import os
 import sqlite3
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Optional
 
@@ -30,6 +31,8 @@ from experimental.keymaster.models import (
     InvalidPassphraseError,
     KeymasterLockedError,
     PassphraseRequiredError,
+    KeymasterMetadataError,
+    PassphraseAlreadyConfiguredError,
 )
 from shared.path_service import get_paths, get_legacy_paths, select_existing_path
 
@@ -86,9 +89,14 @@ _META_KDF_ALGO = "kdf_algorithm"
 _META_KDF_ITERATIONS = "kdf_iterations"
 _META_KDF_SALT_HEX = "kdf_salt_hex"
 _META_PASS_VERIFIER = "passphrase_verifier_hex"
+_PASSPHRASE_META_KEYS = (
+    _META_KDF_ALGO, _META_KDF_ITERATIONS, _META_KDF_SALT_HEX, _META_PASS_VERIFIER,
+)
 
 _KDF_ALGO_VALUE = "PBKDF2_HMAC_SHA256"
 _DEFAULT_KDF_ITERATIONS = 600_000
+# Bound corrupt persisted work factors; generated stores use 600,000.
+_MAX_KDF_ITERATIONS = 1_000_000
 _KDF_SALT_BYTES = 32
 _AES_NONCE_BYTES = 12
 _MAX_PASSPHRASE_BYTES = 1024
@@ -217,14 +225,6 @@ def _coerce_bool(value: Any, *, default: bool) -> bool:
         if v in {"0", "false", "no", "off"}:
             return False
     return default
-
-
-def _coerce_int(value: Any, *, default: int) -> int:
-    try:
-        parsed = int(value)
-    except Exception:
-        return default
-    return parsed if parsed > 0 else default
 
 
 def _table_columns(conn: sqlite3.Connection, table_name: str) -> set[str]:
@@ -385,39 +385,60 @@ def set_secure_mode(conn: sqlite3.Connection, enabled: bool) -> None:
     _meta_set(conn, _META_SECURE_MODE, "1" if bool(enabled) else "0")
 
 
+def _read_passphrase_metadata(conn: sqlite3.Connection) -> Optional[tuple[int, bytes, str]]:
+    values = [_meta_get(conn, key) for key in _PASSPHRASE_META_KEYS]
+    if all(value is None for value in values) and encrypted_row_count(conn) == 0:
+        return None
+    algo, iterations_text, salt_text, verifier = values
+    try:
+        iterations = int(iterations_text)
+        salt = bytes.fromhex(salt_text)
+        verifier_bytes = bytes.fromhex(verifier)
+        if (
+            algo != _KDF_ALGO_VALUE
+            or not 100_000 <= iterations <= _MAX_KDF_ITERATIONS
+            or len(salt) != _KDF_SALT_BYTES
+            or len(verifier) != 64
+            or len(verifier_bytes) != 32
+        ):
+            raise ValueError("invalid metadata")
+    except (TypeError, ValueError) as exc:
+        raise KeymasterMetadataError("Keymaster security metadata is damaged or incomplete") from exc
+    return iterations, salt, verifier
+
+
 def passphrase_is_configured(conn: sqlite3.Connection) -> bool:
-    return all(
-        _meta_get(conn, key, None) not in (None, "")
-        for key in (
-            _META_KDF_ALGO,
-            _META_KDF_ITERATIONS,
-            _META_KDF_SALT_HEX,
-            _META_PASS_VERIFIER,
-        )
-    )
+    """Distinguish unconfigured storage from incomplete/damaged metadata."""
+    return _read_passphrase_metadata(conn) is not None
+
+
+def _begin_write(conn: sqlite3.Connection) -> None:
+    # Pin policy and session validation to the same transaction as the write.
+    if not conn.in_transaction:
+        conn.execute("BEGIN IMMEDIATE")
+
+
+@contextmanager
+def _security_change(conn: sqlite3.Connection):
+    """Atomic security operation without committing the caller's transaction."""
+    _begin_write(conn)
+    conn.execute("SAVEPOINT keymaster_security")
+    try:
+        yield
+    except Exception:
+        conn.execute("ROLLBACK TO SAVEPOINT keymaster_security")
+        raise
+    finally:
+        conn.execute("RELEASE SAVEPOINT keymaster_security")
 
 
 def _session_keys_from_passphrase(conn: sqlite3.Connection, passphrase: str) -> dict[str, bytes]:
-    if not passphrase_is_configured(conn):
+    metadata = _read_passphrase_metadata(conn)
+    if metadata is None:
         raise PassphraseRequiredError("Keymaster passphrase is not configured")
-
-    algo = str(_meta_get(conn, _META_KDF_ALGO, "") or "")
-    if algo != _KDF_ALGO_VALUE:
-        raise RuntimeError(f"unsupported keymaster KDF algorithm: {algo}")
-
-    iterations = _coerce_int(
-        _meta_get(conn, _META_KDF_ITERATIONS, str(_DEFAULT_KDF_ITERATIONS)),
-        default=_DEFAULT_KDF_ITERATIONS,
-    )
-
-    try:
-        salt = bytes.fromhex(str(_meta_get(conn, _META_KDF_SALT_HEX, "") or ""))
-    except Exception as exc:
-        raise RuntimeError("invalid keymaster KDF salt metadata") from exc
-
+    iterations, salt, expected_verifier = metadata
     root_key = _pbkdf2_root_key(passphrase, salt, iterations)
     verifier = _compute_passphrase_verifier(root_key)
-    expected_verifier = str(_meta_get(conn, _META_PASS_VERIFIER, "") or "")
     if not expected_verifier or not hmac.compare_digest(verifier, expected_verifier):
         raise InvalidPassphraseError("invalid passphrase")
 
@@ -429,15 +450,28 @@ def _session_keys_from_passphrase(conn: sqlite3.Connection, passphrase: str) -> 
 
 
 def configure_passphrase(conn: sqlite3.Connection, passphrase: str) -> None:
-    """Set or rotate the Keymaster passphrase metadata."""
-    salt = os.urandom(_KDF_SALT_BYTES)
-    root_key = _pbkdf2_root_key(passphrase, salt, _DEFAULT_KDF_ITERATIONS)
-    verifier = _compute_passphrase_verifier(root_key)
+    """Configure a fresh store; never rotate metadata behind encrypted entries."""
+    with _security_change(conn):
+        if any(_meta_get(conn, key) is not None for key in _PASSPHRASE_META_KEYS) or encrypted_row_count(conn):
+            raise PassphraseAlreadyConfiguredError("A Keymaster passphrase already exists; reset before fresh setup")
+        salt = os.urandom(_KDF_SALT_BYTES)
+        root_key = _pbkdf2_root_key(passphrase, salt, _DEFAULT_KDF_ITERATIONS)
+        verifier = _compute_passphrase_verifier(root_key)
 
-    _meta_set(conn, _META_KDF_ALGO, _KDF_ALGO_VALUE)
-    _meta_set(conn, _META_KDF_ITERATIONS, str(_DEFAULT_KDF_ITERATIONS))
-    _meta_set(conn, _META_KDF_SALT_HEX, salt.hex())
-    _meta_set(conn, _META_PASS_VERIFIER, verifier)
+        _meta_set(conn, _META_KDF_ALGO, _KDF_ALGO_VALUE)
+        _meta_set(conn, _META_KDF_ITERATIONS, str(_DEFAULT_KDF_ITERATIONS))
+        _meta_set(conn, _META_KDF_SALT_HEX, salt.hex())
+        _meta_set(conn, _META_PASS_VERIFIER, verifier)
+
+
+def enable_secure_storage(conn: sqlite3.Connection, passphrase: str) -> tuple[dict[str, bytes], int]:
+    """Set up a fresh passphrase and encrypt plaintext entries atomically."""
+    with _security_change(conn):
+        configure_passphrase(conn, passphrase)
+        keys = unlock_session_keys(conn, passphrase)
+        set_secure_mode(conn, True)
+        converted = migrate_legacy_plaintext_rows(conn, session_keys=keys)
+    return keys, converted
 
 
 def unlock_session_keys(conn: sqlite3.Connection, passphrase: str) -> dict[str, bytes]:
@@ -446,7 +480,7 @@ def unlock_session_keys(conn: sqlite3.Connection, passphrase: str) -> dict[str, 
 
 
 def clear_passphrase_metadata(conn: sqlite3.Connection) -> None:
-    for key in (_META_KDF_ALGO, _META_KDF_ITERATIONS, _META_KDF_SALT_HEX, _META_PASS_VERIFIER):
+    for key in _PASSPHRASE_META_KEYS:
         _meta_delete(conn, key)
 
 
@@ -462,18 +496,26 @@ def encrypted_row_count(conn: sqlite3.Connection) -> int:
 
 
 def _require_secure_session(conn: sqlite3.Connection, session_keys: Optional[dict[str, bytes]]) -> dict[str, bytes]:
-    if not secure_mode_enabled(conn):
-        return {}
-    if not passphrase_is_configured(conn):
+    metadata = _read_passphrase_metadata(conn)
+    if metadata is None:
         raise PassphraseRequiredError("Keymaster passphrase is required")
     if not session_keys:
         raise KeymasterLockedError("Keymaster is locked")
+    root = session_keys.get("root_key")
     enc = session_keys.get("encryption_key")
     fp = session_keys.get("fingerprint_key")
+    if not isinstance(root, (bytes, bytearray)) or len(root) != 32:
+        raise KeymasterLockedError("Keymaster session is invalid; unlock again")
     if not isinstance(enc, (bytes, bytearray)) or len(enc) != 32:
         raise KeymasterLockedError("Keymaster session is invalid")
     if not isinstance(fp, (bytes, bytearray)) or len(fp) != 32:
         raise KeymasterLockedError("Keymaster session is invalid")
+    if not (
+        hmac.compare_digest(_compute_passphrase_verifier(root), metadata[2])
+        and hmac.compare_digest(enc, _derive_subkey(root, b"keymaster-encryption"))
+        and hmac.compare_digest(fp, _derive_subkey(root, b"keymaster-fingerprint"))
+    ):
+        raise KeymasterLockedError("Keymaster session has expired; unlock again")
     return {
         "encryption_key": bytes(enc),
         "fingerprint_key": bytes(fp),
@@ -529,15 +571,6 @@ def _row_to_key_dict(row: sqlite3.Row, *, session_keys: Optional[dict[str, bytes
     }
 
 
-def _require_secure_session_dummy(session_keys: Optional[dict[str, bytes]]) -> dict[str, bytes]:
-    if not session_keys:
-        raise KeymasterLockedError("Keymaster is locked")
-    enc = session_keys.get("encryption_key")
-    if not isinstance(enc, (bytes, bytearray)) or len(enc) != 32:
-        raise KeymasterLockedError("Keymaster session is invalid")
-    return {"encryption_key": bytes(enc)}
-
-
 def key_exists(
     conn: sqlite3.Connection,
     provider: str,
@@ -577,6 +610,7 @@ def create_key(
     notes_norm = _normalize_text(notes)
     now = _utcnow()
 
+    _begin_write(conn)
     if secure_mode_enabled(conn):
         keys = _require_secure_session(conn, session_keys)
         fingerprint = _build_fingerprint(key_norm, keys["fingerprint_key"])
@@ -640,6 +674,8 @@ def get_key(
     ).fetchone()
     if row is None:
         return None
+    if session_keys and row["is_encrypted"]:
+        _require_secure_session(conn, session_keys)
     return _row_to_key_dict(row, session_keys=session_keys)
 
 
@@ -653,6 +689,7 @@ def update_key(
     session_keys: Optional[dict[str, bytes]] = None,
 ) -> None:
     """Update one key entry."""
+    _begin_write(conn)
     existing_row = conn.execute(
         "SELECT provider FROM keymaster_keys WHERE key_id = ?",
         (key_id,),
@@ -764,6 +801,8 @@ def list_keys(
             (provider_norm,),
         ).fetchall()
 
+    if session_keys and any(row["is_encrypted"] for row in rows):
+        _require_secure_session(conn, session_keys)
     return [_row_to_key_dict(row, session_keys=session_keys) for row in rows]
 
 
@@ -781,6 +820,7 @@ def migrate_legacy_plaintext_rows(
     session_keys: dict[str, bytes],
 ) -> int:
     """Encrypt any legacy plaintext rows in-place and return converted count."""
+    _begin_write(conn)
     keys = _require_secure_session(conn, session_keys)
     rows = conn.execute(
         """
@@ -828,7 +868,8 @@ def migrate_rows_to_plaintext(
     session_keys: dict[str, bytes],
 ) -> int:
     """Decrypt all encrypted rows in-place and return converted count."""
-    keys = _require_secure_session_dummy(session_keys)
+    _begin_write(conn)
+    keys = _require_secure_session(conn, session_keys)
     rows = conn.execute(
         """
         SELECT key_id, key_ciphertext
@@ -858,11 +899,12 @@ def migrate_rows_to_plaintext(
     return converted
 
 
-def destructive_reset(conn: sqlite3.Connection) -> None:
-    """Remove all key rows and passphrase metadata (forgotten passphrase recovery path)."""
-    conn.execute("DELETE FROM keymaster_keys")
-    clear_passphrase_metadata(conn)
-    set_secure_mode(conn, True)
+def destructive_reset(conn: sqlite3.Connection, *, secure_mode: bool) -> None:
+    """Delete every provider and passphrase, with an explicit resulting policy."""
+    with _security_change(conn):
+        conn.execute("DELETE FROM keymaster_keys")
+        clear_passphrase_metadata(conn)
+        set_secure_mode(conn, secure_mode)
 
 
 def legacy_plaintext_row_count(conn: sqlite3.Connection) -> int:
@@ -892,20 +934,15 @@ def switch_secure_mode(
 
     Returns number of converted rows.
     """
-    target_enabled = bool(enabled)
-    converted = 0
+    with _security_change(conn):
+        target_enabled = bool(enabled)
+        converted = 0
+        if target_enabled:
+            _require_secure_session(conn, session_keys)
+            set_secure_mode(conn, True)
+            return migrate_legacy_plaintext_rows(conn, session_keys=session_keys or {})
 
-    if target_enabled:
-        if not passphrase_is_configured(conn):
-            raise PassphraseRequiredError("Keymaster passphrase is required")
-        _require_secure_session(conn, session_keys)
-        set_secure_mode(conn, True)
-        converted = migrate_legacy_plaintext_rows(conn, session_keys=session_keys or {})
+        if encrypted_row_count(conn) > 0:
+            converted = migrate_rows_to_plaintext(conn, session_keys=session_keys or {})
+        set_secure_mode(conn, False)
         return converted
-
-    # Disabling secure mode: if encrypted rows exist, require an unlock so values
-    # can be decrypted and preserved.
-    if encrypted_row_count(conn) > 0:
-        converted = migrate_rows_to_plaintext(conn, session_keys=session_keys or {})
-    set_secure_mode(conn, False)
-    return converted

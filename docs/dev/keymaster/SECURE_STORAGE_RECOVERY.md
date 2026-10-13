@@ -68,3 +68,20 @@ must say what it removes before confirmation. No automated backup of secrets.
 
 - Planning packet recorded before product edits. No original-password fix is
   claimed; recovery and UI defects are the approved implementation scope.
+- KSR1 accepted by separate RA on 2026-10-13. Reviewed store/model changes,
+  explicit reset callers, and Web UI/Analyst consumers. Setup/enable/reset use
+  savepoints; write transactions pin session validation to mutation. Stale root
+  and mixed subkeys are rejected. Metadata validation bounds persisted PBKDF2
+  work to 100,000–1,000,000 iterations; generated stores retain 600,000.
+  RA required the upper bound to prevent corrupted metadata freezing unlock.
+- RA validation: `./venv/bin/python -m pytest -q shared/tests/test_keymaster_recovery.py
+  shared/tests/test_keymaster_store.py shared/tests/test_analyst_n3_credentials.py
+  experimental/webui/tests/test_keymaster_routes.py gui/tests/test_keymaster_window.py`
+  → **143 passed, 1 existing Starlette/httpx deprecation warning in 23.57s**.
+  After the work-factor regression: `./venv/bin/python -m pytest -q
+  shared/tests/test_keymaster_recovery.py` → **28 passed in 8.42s**.
+  Independent temporary-store checks confirmed partial metadata-write rollback
+  and stale-session rejection after reset through another connection.
+  `git diff --check` passed. Desktop behavior remains unchanged until KSR2;
+  runtime docs and visual checks close in KSR3. HI review is recommended before
+  merging this secrets-related change.

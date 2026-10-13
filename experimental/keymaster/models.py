@@ -44,3 +44,11 @@ class PassphraseRequiredError(KeymasterError):
 
 class InvalidPassphraseError(KeymasterError):
     """Raised when an unlock attempt fails passphrase verification."""
+
+
+class KeymasterMetadataError(KeymasterError):
+    """Stored security metadata is incomplete or malformed, not a password mismatch."""
+
+
+class PassphraseAlreadyConfiguredError(KeymasterError):
+    """Setup cannot replace an existing passphrase or orphan encrypted entries."""

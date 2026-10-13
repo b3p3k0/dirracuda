@@ -548,7 +548,7 @@ class KeymasterWindow:
             return
         try:
             with self._open_store_connection() as conn:
-                km_store.destructive_reset(conn)
+                km_store.destructive_reset(conn, secure_mode=True)
                 conn.commit()
         except Exception as exc:
             messagebox.showerror("Reset Failed", str(exc), parent=self.window)
