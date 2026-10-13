@@ -1,6 +1,6 @@
 # Keymaster secure storage recovery
 
-Status: KSR1–KSR4 implemented and accepted by a separate RA, 2026-10-13.
+Status: KSR1–KSR4 accepted; KSR5 documentation review in progress, 2026-10-13.
 Track: full process. PA/DA: primary session. RA: separate reviewer.
 
 ## Goal and evidence
@@ -245,3 +245,14 @@ No Blocker or Required findings remain; `git diff --check` passed. Verification
 used Linux/Xvfb and synthetic stores/configuration. HI's two saved keys were
 not read, reset, or modified. This follow-up diagnoses the blank-dialog traceback,
 not the earlier unexplained password-rejection report. Nothing was pushed.
+
+## KSR5 — current-behavior documentation and screenshot
+
+HI requested a README review, refreshed screenshot, and technical reference
+revision. HI clarified that the manuals should describe current behavior;
+incident history and dialog implementation details remain here in KSR4.
+Review both manuals against the code, capture the current desktop controls with
+synthetic entries in an isolated store, and retain recovery boundaries without
+turning the reference into an edit history. No product changes are planned.
+Validate links, screenshot readability, and behavioral accuracy; a separate RA
+reviews and accepts this documentation card. Rollback uses a new revert commit.
