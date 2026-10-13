@@ -55,6 +55,51 @@ def bind_self_hosted_query(dialog):
     dialog.dialog.bind("<FocusIn>", refresh, add="+")
 
 
+# Per-protocol Shodan query wiring: (query var attr, baseline attr, Dorkbook destination).
+_SHODAN_QUERY_PROTOCOLS = (
+    ("smb_shodan_query_var", "_shodan_smb_default", "shodan:SMB"),
+    ("ftp_shodan_query_var", "_shodan_ftp_default", "shodan:FTP"),
+    ("http_shodan_query_var", "_shodan_http_default", "shodan:HTTP"),
+)
+
+
+def refresh_shodan_queries(dialog, *, applied=None):
+    """Preserve run-local edits on refresh; explicit Apply replaces its destination."""
+    path = getattr(dialog, "config_path", None)
+    if applied is not None:
+        identity, destination, query = applied
+        if identity != config_identity(path):
+            return
+        for var_attr, baseline_attr, destination_key in _SHODAN_QUERY_PROTOCOLS:
+            if destination == destination_key:
+                getattr(dialog, var_attr).set(query)
+                setattr(dialog, baseline_attr, query)
+                return
+        return
+    defaults = read_defaults(path)
+    for var_attr, baseline_attr, destination_key in _SHODAN_QUERY_PROTOCOLS:
+        latest = defaults.get(destination_key, "")
+        baseline = getattr(dialog, baseline_attr, "")
+        var = getattr(dialog, var_attr)
+        var.set(reconcile_query(var.get(), baseline, latest))
+        setattr(dialog, baseline_attr, latest)
+
+
+def bind_shodan_queries(dialog):
+    """Watch a scan dialog without a global binding or an event-handler leak."""
+    def refresh(event):
+        if event.widget is not dialog.dialog:
+            return
+        try:
+            applied = getattr(event.widget, "_dorkbook_applied", None) if event.type == tk.EventType.VirtualEvent else None
+            refresh_shodan_queries(dialog, applied=applied)
+        except (OSError, ValueError, RuntimeError):
+            # Keep the visible run queries on a transient config read failure.
+            return
+    dialog.dialog.bind("<<DorkbookApplied>>", refresh, add="+")
+    dialog.dialog.bind("<FocusIn>", refresh, add="+")
+
+
 def open_provider_dorkbook(dialog, provider):
     """Open the same library from either provider, focusing only its group."""
     from gui.components.dorkbook_window import show_dorkbook_window

@@ -14,6 +14,25 @@ and the end of the last completed desktop scan window. Decisions (HI, 2026-10-05
 - A cancelled run does not count.
 - CLI and Web UI runs count only through host `last_seen`.
 
+## Completed task: Start Scan — Shodan provider field parity
+
+Status: implemented on `development` (commits `899ce7e`, `166ed13`, `461a256`,
+`cb7f0d1`, `b125386`, `a81c89f` — the Card 6 redesign of the API-key field
+after an HI testing finding — and `e7f18d1` — Card 7, a bounded first-4-char
+key identifier on the status token); ready for HI re-test, not yet pushed.
+
+Brings the Shodan provider in the unified Start Scan dialog to parity with
+Self-hosted Search: a shared masked API-key row with a reveal toggle and a
+`Keymaster…` button, and a per-protocol editable Shodan query grid (Option A)
+with per-protocol grey-out. Per-protocol queries and the inline key reach the
+backend run-scoped via `_temporary_config_override` / `api_key_override` — no
+CLI/workflow/schema change and one-off edits never overwrite saved config.
+See [SHODAN_SCAN_FIELDS.md](SHODAN_SCAN_FIELDS.md) for the problem, decisions,
+mockups, and code references, and
+[SHODAN_SCAN_FIELDS_PLAN.md](SHODAN_SCAN_FIELDS_PLAN.md) for the implementation
+plan, resolved open questions, and the RA closeout (commit map, security
+sign-off, validation, HI manual-test steps).
+
 ## Completed task: Server List Most Recent Scan Only filter
 
 Adds a `Most Recent Scan Only` option to `Filters ▾`. It shows hosts from the

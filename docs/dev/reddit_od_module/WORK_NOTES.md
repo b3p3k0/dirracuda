@@ -196,8 +196,65 @@ unrelated edits); working notes were 159 lines before this entry. All touched
 files remain in the excellent range. No HI test required for this mechanism;
 an affected host example would be needed to audit a specific observed record.
 
+## 2026-10-06 — Probe observability & safety (hang investigation)
+
+Status: implemented (cards A–D); automated validation PASS; not pushed.
+DA delegated to the Codex CLI (`gpt-6.1-sol`); Claude reviewed + re-ran each
+card's validation (RA). Decision-complete plan + per-card closeout:
+`18-PROBE_OBSERVABILITY_PLAN.md`.
+
+Issue: HI reported the Reddit ingest "hanging" — a real run gave no response
+after ~8 min vs an expected 30–90s.
+
+Investigation (AA) — two independent causes, each verified by live tests + code:
+1. Perceived hang = the bulk sidecar probe pass. With Bulk probe on, `run_ingest`
+   runs the probe pass inline with no progress, no cancel, and no aggregate
+   bound; a feed of many dead/slow hosts runs for minutes while the GUI sits at
+   "Fetching Reddit posts…". A single RSS fetch caps at 20s and a DB lock at ~5s,
+   so neither is the hang. HI confirmed: "appears hung, but waiting shows results."
+2. "No results" = Reddit now hard IP-rate-limits the anonymous RSS endpoint
+   (~1 request / ~20s, no `Retry-After`). Client/parser are healthy (a live cold
+   request parsed 10 real posts); running `new` then `top` back-to-back trips 429.
+
+Changes:
+- A (`570a09d`): optional `progress_cb` through run_ingest → finalize → probe
+  loop; GUI shows a live "Probing n/m targets" line (one scrollback start line,
+  in-place updates after).
+- B (`ef2d309`): optional `cancel_event` wired into the probe engine (which
+  already honored it); GUI creates/stores/clears `dash._reddit_cancel_event`;
+  `cancel_provider_queue` fires it for reddit. Reddit-only output-dialog cancel
+  left as a reported gap.
+- C (`3d1276a`): probe-pass safety budget — `PROBE_PASS_MAX_TARGETS=50`,
+  `PROBE_PASS_DEADLINE_SECONDS=180` (each disabled at <=0) on `IngestOptions`;
+  cap + monotonic deadline via a unified `effective_cancel`; `skipped` surfaced
+  in the GUI summary (no silent caps). The deadline backstops the Card B gap.
+- D (`0c93974`): a `rate_limited` result shows an actionable "wait ~30–60s"
+  warning instead of "Reddit ingest failed: HTTP 429". No retry/network change
+  (A-1a deferred — Elevated Risk).
+
+Validation: each card validated at commit time; final gate across all reddit +
+probe + reddit-GUI suites — **440 passed**. `py_compile` of service.py /
+dashboard_scan.py / dashboard_provider_queue.py / webui app.py — OK.
+`git diff --check` — clean. No live GUI/network run by the agent.
+
+HI check: with Bulk probe on, run a `feed`/`new` ingest — Live Scan Output
+should show a moving "Probing n/m" line and finish bounded; in a multi-provider
+queue, Cancel should stop the probe; two back-to-back runs should show the new
+rate-limit warning.
+
 ## Lessons to carry forward
 
+- The bulk probe pass makes one live request per discovered host and had no
+  aggregate bound. Observability/cancel/budget belong at the
+  `_probe_targets_for_keys` `as_completed` loop (the natural per-target throttle
+  point) — not the engine's per-directory `progress_callback`, which floods.
+- Reddit's anonymous RSS is now tightly IP-rate-limited with no `Retry-After`.
+  Treat a 429 as "space runs apart," not a client bug — the parser is healthy.
+- The HTTP probe engine already honored `cancel_event` end-to-end; the redseek
+  pass simply never passed a settable one. Reuse the existing mechanism (and the
+  `_searxng_cancel_event` GUI precedent) before building new plumbing.
+- A single `effective_cancel = external or threading.Event()` lets one event
+  serve both user-cancel and the wall-clock deadline without branching.
 - Server Notes live in `host_user_flags`, `ftp_user_flags`, and `http_user_flags`.
   Updating a provider's preview field alone will not populate the editable box.
 - Keep Reddit mapping shared across live sync and legacy promotion.

@@ -320,6 +320,24 @@ def sync_option_entries(frame: tk.Widget | None, enabled: bool) -> None:
     _apply_state_recursive(frame, new_state)
 
 
+def sync_shodan_protocol_states(frame: tk.Widget | None) -> None:
+    """Grey each Shodan protocol row's Max+Query entries by its checkbox state.
+
+    Composes with the provider-level disable in :func:`sync_option_entries`: the
+    caller enables the whole frame first, then calls this to re-disable the rows
+    whose protocol checkbox is unchecked. Rows stay visible, never removed.
+    """
+    if frame is None:
+        return
+    for selected_var, max_entry, query_entry in getattr(frame, "_shodan_protocol_rows", ()):
+        state = tk.NORMAL if bool(selected_var.get()) else tk.DISABLED
+        for entry in (max_entry, query_entry):
+            try:
+                entry.configure(state=state)
+            except tk.TclError:
+                pass
+
+
 def sync_searxng_option_state(frame: tk.Widget | None, enabled: bool) -> None:
     """Apply enabled state to the SearXNG panel, including tuning value labels.
 

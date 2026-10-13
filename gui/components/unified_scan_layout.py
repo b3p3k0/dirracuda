@@ -19,7 +19,11 @@ from gui.utils.window_positions import remember_window_position
 from gui.utils.keybindings import bind_close_shortcuts, bind_submit_shortcuts
 
 
-DEFAULT_GEOMETRY = "960x720"
+# Height bumped 800 -> 824 for the Card 4 shared API-key row at the top of the
+# Shodan panel: the extra row pushed worst-case content (all providers on, all
+# regions selected) ~7px past the canvas, tripping the no-scroll guard. +24px
+# restores the fit-without-scroll margin; width unchanged.
+DEFAULT_GEOMETRY = "960x824"
 MIN_WIDTH = 840
 MIN_HEIGHT = 680
 
@@ -356,38 +360,98 @@ def _build_provider_section(owner: Any, parent: tk.Widget) -> None:
     )
 
 
+def _open_keymaster(owner: Any) -> None:
+    """Open the modeless Keymaster window; do not wait on it.
+
+    Keymaster writes shodan.api_key to config directly (no new grab_set/Toplevel
+    here); the dialog's FocusIn status refresh flips the sentinel token to
+    "<CONFIGURED>" without reopening. The real key never reaches the field.
+    """
+    from gui.components.keymaster_window import show_keymaster_window
+
+    show_keymaster_window(
+        owner.dialog,
+        settings_manager=owner._settings_manager,
+        config_path=str(owner.config_path),
+    )
+
+
 def _build_shodan_options(owner: Any, parent: tk.Widget) -> tk.Frame:
+    # Vertical per-protocol grid (Option A): col 0 = protocol checkbox,
+    # col 1 = Max entry, col 2 = Shodan query entry (stretches). A shared masked
+    # API-key row spans the top; the Dorkbook button sits top-right of the header
+    # strip; the estimate row spans the bottom.
     frame = tk.Frame(parent)
     owner.theme.apply_to_widget(frame, "main_window")
+    frame.grid_columnconfigure(2, weight=1)
 
-    protocol_items = (
-        ("SMB", owner.protocol_smb_var, owner.smb_max_results_var),
-        ("FTP", owner.protocol_ftp_var, owner.ftp_max_results_var),
-        ("HTTP", owner.protocol_http_var, owner.http_max_results_var),
+    # Shared API-key row (Card 6, Design B) — one per account, spans the panel
+    # width. It is BOTH a non-secret status indicator and an optional per-run
+    # override box; it NEVER displays the stored key and has no reveal control.
+    # In sentinel mode the field is plaintext (show="") and holds a status token;
+    # focusing it switches to a masked (show="*") override edit. It lives inside
+    # the Shodan frame, so the provider-level _apply_state_recursive greys it when
+    # Shodan is OFF. The per-protocol grey-out (sync_shodan_protocol_states) only
+    # iterates _shodan_protocol_rows, so it never touches this row — correct, the
+    # key is shared across protocols.
+    key_row = tk.Frame(frame)
+    owner.theme.apply_to_widget(key_row, "main_window")
+    key_row.grid(row=0, column=0, columnspan=3, sticky="ew", pady=(0, 2))
+    _muted_label(owner, key_row, "API key").pack(side=tk.LEFT, padx=(0, 6))
+    keymaster_button = ttk.Button(
+        key_row, text="Keymaster...", width=12, padding=(4, 0),
+        command=lambda: _open_keymaster(owner),
     )
-    for index, (label, selected_var, results_var) in enumerate(protocol_items):
-        column = index * 2
-        check = ttk.Checkbutton(
-            frame,
-            text=label,
-            variable=selected_var,
-            command=owner._refresh_protocol_estimate_lines,
-        )
-        check.grid(row=0, column=column, sticky="w", padx=(0, 4), pady=2)
-        entry = ttk.Entry(frame, textvariable=results_var, width=8)
-        entry.grid(row=0, column=column + 1, sticky="w", padx=(0, 12), pady=2)
+    keymaster_button.pack(side=tk.RIGHT, padx=(6, 0))
+    # Plaintext while the field holds a sentinel status token; masked otherwise.
+    # The CONFIGURED token can now carry a first-4-char hint (``<CONFIGURED> |
+    # AbCD…``), so trust the sentinel flag rather than matching the dynamic text.
+    sentinel = getattr(owner, "_shodan_api_key_sentinel_active", True)
+    key_entry = ttk.Entry(
+        key_row,
+        textvariable=owner.shodan_api_key_var,
+        show="" if sentinel else "*",
+    )
+    key_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
+    key_entry.bind("<FocusIn>", lambda _e: owner._on_shodan_key_focus_in(key_entry))
+    key_entry.bind("<FocusOut>", lambda _e: owner._on_shodan_key_focus_out(key_entry))
+    frame._shodan_api_key_entry = key_entry
+
+    _muted_label(owner, frame, "Max").grid(row=1, column=1, sticky="w", padx=(0, 8))
+    _muted_label(owner, frame, "Shodan query").grid(row=1, column=2, sticky="w")
 
     dorkbook_button = ttk.Button(
         frame, text="Dorkbook...", width=12, padding=(4, 0),
         command=lambda: open_provider_dorkbook(owner, "shodan"),
     )
-    dorkbook_button.grid(row=0, column=6, sticky="e", pady=2)
+    dorkbook_button.grid(row=1, column=2, sticky="e", pady=(0, 1))
     frame._dorkbook_button = dorkbook_button
-    frame.grid_columnconfigure(6, weight=1)
+
+    protocol_items = (
+        ("SMB", owner.protocol_smb_var, owner.smb_max_results_var, owner.smb_shodan_query_var),
+        ("FTP", owner.protocol_ftp_var, owner.ftp_max_results_var, owner.ftp_shodan_query_var),
+        ("HTTP", owner.protocol_http_var, owner.http_max_results_var, owner.http_shodan_query_var),
+    )
+    protocol_rows = []
+    for index, (label, selected_var, results_var, query_var) in enumerate(protocol_items):
+        row = index + 2
+        check = ttk.Checkbutton(
+            frame,
+            text=label,
+            variable=selected_var,
+            command=owner._on_shodan_protocol_toggle,
+        )
+        check.grid(row=row, column=0, sticky="w", padx=(0, 8), pady=1)
+        max_entry = ttk.Entry(frame, textvariable=results_var, width=8)
+        max_entry.grid(row=row, column=1, sticky="w", padx=(0, 8), pady=1)
+        query_entry = ttk.Entry(frame, textvariable=query_var)
+        query_entry.grid(row=row, column=2, sticky="ew", pady=1)
+        protocol_rows.append((selected_var, max_entry, query_entry))
+    frame._shodan_protocol_rows = protocol_rows
 
     estimate_row = tk.Frame(frame)
     owner.theme.apply_to_widget(estimate_row, "main_window")
-    estimate_row.grid(row=1, column=0, columnspan=7, sticky="ew", pady=0)
+    estimate_row.grid(row=5, column=0, columnspan=3, sticky="ew", pady=0)
     owner._shodan_helper_row = estimate_row
     owner.protocol_cost_label = _muted_label(owner, estimate_row, "")
     owner.protocol_cost_label.pack(side=tk.LEFT)

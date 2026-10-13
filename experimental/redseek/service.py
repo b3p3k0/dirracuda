@@ -26,9 +26,11 @@ replace_cache semantics:
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import datetime
 import sqlite3
+import threading
+import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal, Optional
+from typing import Callable, Literal, Optional
 
 from shared.probe_concurrency import PROBE_WORKERS_DEFAULT, clamp_probe_workers
 from experimental.redseek.client import (
@@ -58,6 +60,12 @@ from experimental.redseek.store import (
 # Public data structures
 # ---------------------------------------------------------------------------
 
+# Bound worst-case probe fan-out and aggregate runtime for pathological feeds.
+# A value <= 0 disables the corresponding bound.
+PROBE_PASS_MAX_TARGETS = 50
+PROBE_PASS_DEADLINE_SECONDS = 180
+
+
 @dataclass
 class IngestOptions:
     sort: str                    # "new" | "top"
@@ -78,6 +86,8 @@ class IngestOptions:
     probe_max_files: int = 5
     probe_timeout_seconds: int = 10
     probe_max_depth: int = 1
+    probe_max_targets: int = PROBE_PASS_MAX_TARGETS
+    probe_deadline_seconds: int = PROBE_PASS_DEADLINE_SECONDS
     replace_cache_scope: Literal["full", "state_only"] = "full"
 
 
@@ -213,6 +223,14 @@ def _resolve_probe_limits(options: IngestOptions) -> dict[str, int]:
     return limits
 
 
+def _emit_probe_progress(progress_cb: Optional[Callable[[str], None]], msg: str) -> None:
+    if progress_cb is not None:
+        try:
+            progress_cb(msg)
+        except Exception:
+            pass
+
+
 def _probe_targets_for_keys(
     dedupe_keys: list[str],
     db_path: Optional[Path],
@@ -220,6 +238,10 @@ def _probe_targets_for_keys(
     config_path: Optional[str] = None,
     worker_count: int = PROBE_WORKERS_DEFAULT,
     probe_limits: Optional[dict[str, int]] = None,
+    progress_cb: Optional[Callable[[str], None]] = None,
+    cancel_event: Optional[threading.Event] = None,
+    max_targets: int = PROBE_PASS_MAX_TARGETS,
+    deadline_seconds: int = PROBE_PASS_DEADLINE_SECONDS,
 ) -> dict[str, int]:
     """Probe current-run concrete targets and persist sidecar probe fields."""
     from gui.utils.sidecar_probe import (
@@ -263,6 +285,18 @@ def _probe_targets_for_keys(
     if not targets:
         return counts
 
+    # Non-positive values disable the target cap.
+    if max_targets and max_targets > 0 and len(targets) > max_targets:
+        counts["skipped"] += len(targets) - max_targets
+        targets = targets[:max_targets]
+
+    effective_cancel = cancel_event or threading.Event()
+    # Non-positive values disable the wall-clock deadline.
+    deadline = (
+        time.monotonic() + deadline_seconds
+        if deadline_seconds and deadline_seconds > 0 else None
+    )
+
     try:
         patterns = build_indicator_patterns(config_path)
     except Exception:
@@ -277,6 +311,11 @@ def _probe_targets_for_keys(
         return counts
 
     try:
+        _emit_probe_progress(progress_cb, f"Probing {len(targets)} targets…")
+        if effective_cancel.is_set():
+            counts["skipped"] += len(targets)
+            conn.commit()
+            return counts
         with ThreadPoolExecutor(
             max_workers=max_workers,
             thread_name_prefix="reddit-sidecar-probe",
@@ -287,11 +326,23 @@ def _probe_targets_for_keys(
                     target,
                     config_path=config_path,
                     indicator_patterns=patterns,
+                    cancel_event=effective_cancel,
                     **(probe_limits or {}),
                 ): row
                 for row, target in targets
             }
             for future in as_completed(future_to_row):
+                now = time.monotonic()
+                deadline_exceeded = deadline is not None and now >= deadline
+                if effective_cancel.is_set() or deadline_exceeded:
+                    if deadline_exceeded:
+                        effective_cancel.set()
+                    # Unsupported rows were counted before submission; only add
+                    # the current and remaining unrecorded supported targets.
+                    counts["skipped"] += len(future_to_row) - counts["total"]
+                    for pending in future_to_row:
+                        pending.cancel()
+                    break
                 row = future_to_row[future]
                 try:
                     outcome = future.result()
@@ -323,6 +374,12 @@ def _probe_targets_for_keys(
                     counts["clean"] += 1
                 else:
                     counts["unprobed"] += 1
+                _emit_probe_progress(
+                    progress_cb,
+                    f"Probing {counts['total']}/{len(targets)} targets — "
+                    f"{counts['clean']} clean, {counts['issue']} flagged, "
+                    f"{counts['unprobed']} unprobed",
+                )
         conn.commit()
         return counts
     except Exception:
@@ -339,6 +396,9 @@ def _finalize_result_with_optional_probe(
     options: IngestOptions,
     result: IngestResult,
     db_path: Optional[Path],
+    *,
+    progress_cb: Optional[Callable[[str], None]] = None,
+    cancel_event: Optional[threading.Event] = None,
 ) -> IngestResult:
     """Apply the explicit bulk probe pass after ingest commits successfully."""
     bulk_probe_enabled = bool(getattr(options, "bulk_probe_enabled", False))
@@ -353,6 +413,10 @@ def _finalize_result_with_optional_probe(
         config_path=getattr(options, "probe_config_path", None),
         worker_count=_resolve_probe_worker_count(options),
         probe_limits=_resolve_probe_limits(options),
+        progress_cb=progress_cb,
+        cancel_event=cancel_event,
+        max_targets=getattr(options, "probe_max_targets", PROBE_PASS_MAX_TARGETS),
+        deadline_seconds=getattr(options, "probe_deadline_seconds", PROBE_PASS_DEADLINE_SECONDS),
     )
     result.probe_total = summary.get("total", 0)
     result.probe_clean = summary.get("clean", 0)
@@ -774,7 +838,13 @@ def _run_search(
 # Public entry point
 # ---------------------------------------------------------------------------
 
-def run_ingest(options: IngestOptions, db_path: Optional[Path] = None) -> IngestResult:
+def run_ingest(
+    options: IngestOptions,
+    db_path: Optional[Path] = None,
+    *,
+    progress_cb: Optional[Callable[[str], None]] = None,
+    cancel_event: Optional[threading.Event] = None,
+) -> IngestResult:
     """
     Run one ingestion cycle for the given options.
 
@@ -862,4 +932,7 @@ def run_ingest(options: IngestOptions, db_path: Optional[Path] = None) -> Ingest
         result = _run_new(options, fetch_result, db_path, now_str, replace_cache_done)
     else:
         result = _run_top(options, fetch_result, db_path, now_str, replace_cache_done)
-    return _finalize_result_with_optional_probe(options, result, db_path)
+    return _finalize_result_with_optional_probe(
+        options, result, db_path, progress_cb=progress_cb,
+        cancel_event=cancel_event,
+    )

@@ -885,7 +885,10 @@ class TestStartRedditScan:
         dash = _make_dash()
         captured = []
 
-        def _fake_run(options, db_path=None):
+        def _fake_run(options, db_path=None, *, progress_cb=None, cancel_event=None):
+            assert isinstance(cancel_event, threading.Event)
+            assert cancel_event is dash._reddit_cancel_event
+            assert not cancel_event.is_set()
             captured.append(options)
             return _make_reddit_result()
 
@@ -914,7 +917,7 @@ class TestStartRedditScan:
         dash = _make_dash()
         captured = []
 
-        def _fake_run(options, db_path=None):
+        def _fake_run(options, db_path=None, *, progress_cb=None, cancel_event=None):
             captured.append(options)
             return _make_reddit_result()
 
@@ -934,7 +937,7 @@ class TestStartRedditScan:
         dash = _make_dash()
         errors = []
 
-        def _fake_run(options, db_path=None):
+        def _fake_run(options, db_path=None, *, progress_cb=None, cancel_event=None):
             raise AssertionError("run_ingest should not be called for unsupported user mode")
 
         monkeypatch.setattr("experimental.redseek.service.run_ingest", _fake_run)
@@ -955,7 +958,7 @@ class TestStartRedditScan:
         dash = _make_dash()
         captured = []
 
-        def _fake_run(options, db_path=None):
+        def _fake_run(options, db_path=None, *, progress_cb=None, cancel_event=None):
             captured.append(options)
             return _make_reddit_result()
 
@@ -977,7 +980,7 @@ class TestStartRedditScan:
         dash = _make_dash()
         captured = []
 
-        def _fake_run(options, db_path=None):
+        def _fake_run(options, db_path=None, *, progress_cb=None, cancel_event=None):
             captured.append(options)
             return _make_reddit_result()
 
@@ -1000,7 +1003,7 @@ class TestStartRedditScan:
         dash.settings_manager = sm
         captured = []
 
-        def _fake_run(options, db_path=None):
+        def _fake_run(options, db_path=None, *, progress_cb=None, cancel_event=None):
             captured.append(options)
             return _make_reddit_result()
 
@@ -1048,6 +1051,47 @@ class TestStartRedditScan:
 # ---------------------------------------------------------------------------
 
 class TestOnRedditScanDone:
+    def test_rate_limited_result_shows_warning_without_error(self, monkeypatch):
+        dash = _make_dash()
+        warnings = []
+        errors = []
+        log_msgs = []
+        dash._log_status_event = log_msgs.append
+        monkeypatch.setattr(
+            "gui.components.dashboard.messagebox.showwarning",
+            lambda *a, **k: warnings.append(a),
+        )
+        monkeypatch.setattr(
+            "gui.components.dashboard.messagebox.showerror",
+            lambda *a, **k: errors.append(a),
+        )
+        result = _make_reddit_result(rate_limited=True, error="HTTP 429")
+        ds._on_reddit_scan_done(dash, result, reddit_only=True, queue_managed=False)
+        msg = (
+            "Reddit rate-limited this request. Wait ~30–60s and try again "
+            "(space new/top runs apart)."
+        )
+        assert warnings == [("Reddit Rate Limited", msg)]
+        assert errors == []
+        assert log_msgs == [msg]
+
+    def test_non_rate_limited_error_keeps_error_dialog(self, monkeypatch):
+        dash = _make_dash()
+        warnings = []
+        errors = []
+        monkeypatch.setattr(
+            "gui.components.dashboard.messagebox.showwarning",
+            lambda *a, **k: warnings.append(a),
+        )
+        monkeypatch.setattr(
+            "gui.components.dashboard.messagebox.showerror",
+            lambda *a, **k: errors.append(a),
+        )
+        result = _make_reddit_result(rate_limited=False, error="boom")
+        ds._on_reddit_scan_done(dash, result, reddit_only=True, queue_managed=False)
+        assert errors == [("Reddit Ingest Error", "Reddit ingest failed: boom")]
+        assert warnings == []
+
     def test_error_result_shows_showerror(self, monkeypatch):
         dash = _make_dash()
         errors = []
@@ -1121,10 +1165,12 @@ class TestOnRedditScanDone:
     def test_clears_running_flag_on_completion(self, monkeypatch):
         dash = _make_dash()
         dash._reddit_scan_running = True
+        dash._reddit_cancel_event = threading.Event()
         clear_calls = []
         dash._clear_reddit_task = lambda: clear_calls.append(True)
         ds._on_reddit_scan_done(dash, _make_reddit_result())
         assert dash._reddit_scan_running is False
+        assert dash._reddit_cancel_event is None
         assert clear_calls == [True]
 
     def test_clears_running_flag_on_error(self, monkeypatch):
@@ -1259,7 +1305,7 @@ class TestStartRedditScanPrimaryDB:
         dash = _make_dash()
         captured_db: list = []
 
-        def _fake_run(options, db_path=None):
+        def _fake_run(options, db_path=None, *, progress_cb=None, cancel_event=None):
             captured_db.append(db_path)
             return _make_reddit_result()
 

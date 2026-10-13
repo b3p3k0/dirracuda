@@ -318,6 +318,8 @@ def build_protocol_scan_options(protocol: str, common_options: Dict[str, Any]) -
             "smb_max_query_credits_per_scan": smb_budget,
             "ftp_max_query_credits_per_scan": ftp_budget,
             "http_max_query_credits_per_scan": http_budget,
+            "smb_shodan_query": common_options.get("smb_shodan_query"),
+            "api_key_override": common_options.get("api_key_override"),
         }
 
     if protocol == "ftp":
@@ -339,6 +341,8 @@ def build_protocol_scan_options(protocol: str, common_options: Dict[str, Any]) -
             "smb_max_query_credits_per_scan": smb_budget,
             "ftp_max_query_credits_per_scan": ftp_budget,
             "http_max_query_credits_per_scan": http_budget,
+            "ftp_shodan_query": common_options.get("ftp_shodan_query"),
+            "api_key_override": common_options.get("api_key_override"),
         }
 
     # HTTP
@@ -364,6 +368,8 @@ def build_protocol_scan_options(protocol: str, common_options: Dict[str, Any]) -
         "smb_max_query_credits_per_scan": smb_budget,
         "ftp_max_query_credits_per_scan": ftp_budget,
         "http_max_query_credits_per_scan": http_budget,
+        "http_shodan_query": common_options.get("http_shodan_query"),
+        "api_key_override": common_options.get("api_key_override"),
     }
 
 
@@ -740,6 +746,12 @@ def start_reddit_scan(dash, scan_request: dict) -> bool:
     except Exception:
         pass
 
+    cancel_event = threading.Event()
+    try:
+        dash._reddit_cancel_event = cancel_event
+    except Exception:
+        pass
+
     _providers = [str(p).strip().lower() for p in (scan_request.get("providers") or [])]
     _reddit_only = set(_providers) == {"reddit"}
 
@@ -763,9 +775,29 @@ def start_reddit_scan(dash, scan_request: dict) -> bool:
     def _worker():
         from experimental.redseek.main_db_sync import sync_targets_to_main_db
         sync_summary: dict = {}
+        _probe_started = False
+
+        def _probe_progress(msg: str) -> None:
+            nonlocal _probe_started
+            first_message = not _probe_started
+            _probe_started = True
+
+            def _dispatch(m=msg, first=first_message):
+                if first:
+                    _call_dashboard_hook(dash, "_log_status_event", m)
+                if _reddit_only:
+                    _call_dashboard_hook(dash, "_update_progress_summary", "Reddit", m)
+            try:
+                dash.parent.after(0, _dispatch)
+            except Exception:
+                pass
+
         try:
             _ui_log("Fetching Reddit posts...")
-            result = run_ingest(options, db_path=db_path)
+            result = run_ingest(
+                options, db_path=db_path, progress_cb=_probe_progress,
+                cancel_event=cancel_event,
+            )
         except Exception as exc:
             from experimental.redseek.service import IngestResult
             result = IngestResult(
@@ -797,6 +829,7 @@ def start_reddit_scan(dash, scan_request: dict) -> bool:
         except Exception:
             try:
                 dash._reddit_scan_running = False
+                dash._reddit_cancel_event = None
             except Exception:
                 pass
             _call_dashboard_hook(dash, "_clear_reddit_task")
@@ -811,6 +844,7 @@ def start_reddit_scan(dash, scan_request: dict) -> bool:
     except Exception as exc:
         try:
             dash._reddit_scan_running = False
+            dash._reddit_cancel_event = None
         except Exception:
             pass
         _call_dashboard_hook(dash, "_clear_reddit_task")
@@ -838,10 +872,34 @@ def _on_reddit_scan_done(
 ) -> None:
     """Handle Reddit ingest completion on the UI thread."""
     try:
+        dash._reddit_cancel_event = None
+    except Exception:
+        pass
+    try:
         dash._reddit_scan_running = False
     except Exception:
         pass
     _call_dashboard_hook(dash, "_clear_reddit_task")
+
+    if getattr(result, "rate_limited", False):
+        msg = (
+            "Reddit rate-limited this request. Wait ~30–60s and try again "
+            "(space new/top runs apart)."
+        )
+        _call_dashboard_hook(dash, "_log_status_event", msg)
+        if queue_managed:
+            from gui.components.dashboard_provider_queue import complete_provider
+
+            complete_provider(
+                dash,
+                "reddit",
+                provider_generation,
+                success=False,
+                error="rate_limited",
+            )
+        else:
+            _mb().showwarning("Reddit Rate Limited", msg)
+        return
 
     if result.error:
         _call_dashboard_hook(dash, "_log_status_event", f"Reddit ingest failed: {result.error}")
@@ -890,7 +948,8 @@ def _on_reddit_scan_done(
             summary_lines += [
                 "",
                 f"Probe: {result.probe_total} attempted — {result.probe_clean} clean, "
-                f"{result.probe_issue} flagged, {result.probe_unprobed} unprobed.",
+                f"{result.probe_issue} flagged, {result.probe_unprobed} unprobed, "
+                f"{result.probe_skipped} skipped.",
             ]
         scan_results = {
             "protocol": "reddit",
