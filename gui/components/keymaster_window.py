@@ -1026,9 +1026,22 @@ class KeymasterWindow(KeymasterSecurityMixin):
         if row is None:
             messagebox.showwarning("No Selection", "Select a key to apply.", parent=self.window)
             return
+        needs_unlock = self._secure_mode_enabled and not self._session_keys
         if not self._ensure_unlocked_for_sensitive_action():
             self._status_var.set("Unlock required before applying keys.")
             return
+        if needs_unlock:
+            # Unlock reloads the tree; the pre-unlock row still has an empty key.
+            try:
+                with self._open_store_connection() as conn:
+                    row = km_store.get_key(conn, int(row["key_id"]), session_keys=self._session_keys)
+            except Exception as exc:
+                self._security_action_failed("Apply failed", exc)
+                return
+            if row is None:
+                self._load_entries()
+                self._status_var.set("The selected key no longer exists. Select another key.")
+                return
         if not str(row.get("api_key") or "").strip():
             messagebox.showerror(
                 "Apply Failed",

@@ -41,8 +41,9 @@ class PassphraseDialog:
         self.result: Optional[str] = None
         self.dialog = tk.Toplevel(parent)
         self.dialog.title("Set Keymaster passphrase" if setup else "Unlock Keymaster")
-        self.dialog.transient(parent)
-        self.dialog.grab_set()
+        # A transient of a withdrawn parent may never become viewable.
+        if parent.winfo_viewable():
+            self.dialog.transient(parent)
         theme.apply_to_widget(self.dialog, "main_window")
         self.dialog.geometry("500x330")
         self.dialog.minsize(400, 300)
@@ -93,6 +94,16 @@ class PassphraseDialog:
         self.dialog.bind("<Escape>", lambda _event: self._cancel())
         self.dialog.protocol("WM_DELETE_WINDOW", self._cancel)
         self.dialog.bind("<FocusIn>", self._focus_entry, add="+")
+        try:
+            # Follow Tk's modal-dialog order: build, map, grab, then focus.
+            if not self.dialog.winfo_viewable():
+                self.dialog.wait_visibility()
+            self.dialog.grab_set()
+        except tk.TclError:
+            if not self.dialog.winfo_exists():
+                return  # Closed while waiting for the window manager to map it.
+            self.dialog.destroy()
+            raise
         ensure_dialog_focus(self.dialog, parent)
 
     def _focus_entry(self, event):
@@ -124,7 +135,8 @@ class PassphraseDialog:
         self.dialog.destroy()
 
     def show(self) -> Optional[str]:
-        self.parent.wait_window(self.dialog)
+        if self.dialog.winfo_exists():
+            self.parent.wait_window(self.dialog)
         result, self.result = self.result, None
         return result
 

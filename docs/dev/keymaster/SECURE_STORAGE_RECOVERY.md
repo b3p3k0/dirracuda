@@ -1,6 +1,6 @@
 # Keymaster secure storage recovery
 
-Status: KSR1–KSR3 implemented and accepted by a separate RA, 2026-10-13.
+Status: KSR1–KSR4 implemented and accepted by a separate RA, 2026-10-13.
 Track: full process. PA/DA: primary session. RA: separate reviewer.
 
 ## Goal and evidence
@@ -206,3 +206,42 @@ Use synthetic temporary stores/configs; do not touch HI's two saved keys. A
 distinct RA reviews the patch and owns the acceptance commit. Rollback is a new
 revert commit, never a history rewrite. This focused follow-up is authorized by
 HI's regression report within the accepted recovery/UI work.
+
+KSR4 accepted by separate RA on 2026-10-13. The form now exists and is viewable
+before the modal grab; focus remains the final initialization step. Hidden
+parents do not prevent mapping, cancellation during mapping returns cleanly,
+and other grab failures destroy the dialog before propagating. Apply reloads
+the original selected key ID after unlock instead of using its locked snapshot;
+a missing row stops without writing configuration.
+
+Independent RA command:
+
+```bash
+xvfb-run -a ./venv/bin/python -m pytest -q \
+  gui/tests/test_keymaster_security_rendered.py \
+  gui/tests/test_keymaster_security.py \
+  gui/tests/test_keymaster_window.py \
+  gui/tests/test_dialog_audit.py \
+  gui/tests/test_theme_style_guardrail.py \
+  gui/tests/test_messagebox_guardrail.py
+```
+
+Output: **98 passed in 9.99s**. Regression coverage includes delayed mapping
+with the reported native precondition enforced, two-key reopen/double-click/
+unlock/apply, wrong password, cancellation, deletion during unlock, withdrawn
+parent, and close/grab failure cleanup. DA's failure-first run reported
+**3 failed, 1 passed** before the fixes.
+
+DA command `./venv/bin/python scripts/run_dialog_audit.py --scenario
+keymaster-setup,keymaster-unlock --theme both --output
+/tmp/dirracuda-keymaster-visibility-audit` reported **12 results, 0 failed,
+0 uncovered**. RA inspected the desktop-light unlock screenshot: the full form
+and focused passphrase entry are visible. An additional DA temporary-store
+diagnostic generated actual Treeview press/release pairs and reported
+**PASS: real Treeview double-click binding opens a mapped modal and applies the
+second saved key after unlock**, with no callback exceptions or remaining grab.
+
+No Blocker or Required findings remain; `git diff --check` passed. Verification
+used Linux/Xvfb and synthetic stores/configuration. HI's two saved keys were
+not read, reset, or modified. This follow-up diagnoses the blank-dialog traceback,
+not the earlier unexplained password-rejection report. Nothing was pushed.

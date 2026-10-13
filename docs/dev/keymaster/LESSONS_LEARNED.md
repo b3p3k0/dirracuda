@@ -57,3 +57,11 @@ Status: initial seed; append during implementation
 - Keep verification claims bounded: this effort used Linux/Xvfb, synthetic
   stores, automated Tk interactions, and screenshot inspection. It did not
   reset the live store or establish the cause of the original password report.
+- Modal grabs require a mapped window. Build all controls, wait for visibility,
+  then grab and focus; a fast Xvfb run can conceal the timing failure unless
+  mapping is deliberately delayed in a regression test.
+- Unlock may rebuild a list and clear its selection. Keep the requested key ID
+  across the modal interaction and reload that row after successful unlock;
+  the old locked snapshot still contains an empty key even when the session is
+  now unlocked. Cancellation, incorrect passwords, and vanished rows must not
+  change the applied credential.
