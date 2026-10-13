@@ -1253,72 +1253,134 @@ Integration seam:
 - `experimental/webui/dorkbook_routes.py` owns authenticated library/default routes; `/prefill` remains an alias
 - [Detailed validation, live limitations, and HI checklist](dev/dorkbook/UNIFIED_VALIDATION.md)
 
-Keymaster entry path:
+#### Keymaster
 
-```text
-Dashboard -> Accessories tab -> Open Keymaster
-  -> KeymasterWindow (reads/writes ~/.dirracuda/data/experimental/keymaster.db)
-  -> singleton modeless window (focus existing on repeated open)
-```
+Open **Dashboard → Accessories → Keymaster → Open Keymaster**. The desktop
+manager is a modeless, single-instance window; opening it again focuses the
+existing window. It manages Shodan keys in the shared Keymaster sidecar at
+`~/.dirracuda/data/experimental/keymaster.db`. Analyst LLM tokens also live in
+this store, although they are not listed in the Shodan key table.
 
-Keymaster secure-storage behavior:
+**Storage states and passphrase actions**
 
-- Secure storage policy defaults to enabled and is persisted in sidecar metadata.
-- Desktop opening reads state without prompting: Off, Setup needed, Locked, or Unlocked; malformed/unreadable storage shows Storage problem. Explicit Set passphrase/Enable secure storage and Unlock actions open masked forms with visibility toggles. Setup includes confirmation in the same form; exact input is preserved.
-- PBKDF2-HMAC-SHA256 derives the root key with 600,000 iterations and a random 32-byte salt. HMAC purpose labels derive separate encryption and fingerprint subkeys.
-- AES-GCM encrypts API keys. A keyed HMAC-SHA256 fingerprint supports equality checks and duplicate rejection without storing the fingerprint key.
-- The fingerprint is deterministic within one unlocked store, so equal saved keys have equal fingerprints. That limited equality leak is intentional; the value is never returned to either UI.
-- Successful unlock derives per-session keys for the Keymaster window. Closing clears the window's keys; reopening requires explicit unlock. Session root and subkeys are checked against current metadata before writes and cached-key actions, so pre-reset sessions cannot encrypt new entries under an obsolete key.
-- Legacy plaintext sidecar rows are migrated in place after successful setup/unlock.
-- `Delete all keys and disable…` confirms deletion of every provider's rows and passphrase metadata, requires no password, and persists secure storage off. It clears window session/row/credit caches and invalidates late credit-check results; an already-started request may finish. Applied configuration credentials and backups remain. This is logical deletion, not forensic erasure.
-- Setup cannot overwrite existing or partial passphrase metadata, or orphan encrypted rows. Legacy off-mode stores retaining metadata require explicit reset before fresh setup. Fresh enable encrypts any plaintext entries with the new passphrase in one transaction.
-- Store security operations use savepoints without committing caller work. `destructive_reset(conn, *, secure_mode)` requires an explicit resulting policy; desktop passes `False`. `enable_secure_storage(conn, passphrase)` returns `(session_keys, converted_count)`. `validate_session_keys(conn, session_keys)` checks current ownership. Existing `switch_secure_mode` remains a store conversion API, with no desktop preserve-as-plaintext action.
-- Missing setup, password mismatch, malformed metadata, and storage errors have distinct safe desktop messages. Metadata work factors must be within 100,000–1,000,000 PBKDF2 iterations; generated stores still use 600,000. No schema or cryptographic algorithm change accompanies the recovery controls.
+Opening Keymaster reads the saved state without prompting for a password.
+Storage status remains visible separately from operation messages.
 
-CodeQL alert #23 classifies the API key passed to the fingerprint HMAC as a password sent to a fast hash. The operation is keyed duplicate detection, not password storage: the HMAC key is domain-separated from the AES-GCM key, exists only after passphrase unlock, and is not persisted. The construction follows [HMAC](https://www.rfc-editor.org/info/rfc2104); passphrase derivation follows [PBKDF2](https://www.rfc-editor.org/info/rfc8018). Changing either algorithm to satisfy the alert would weaken or obscure the design, so the alert is handled as a documented false positive.
+| State | Meaning and action |
+| --- | --- |
+| `Setup needed` | Secure storage is enabled by default, but no passphrase exists. Choose `Set passphrase…`. Cancelling leaves setup incomplete. |
+| `Locked` | A passphrase exists, but this window has no unlocked session. Saved row metadata remains visible; choose `Unlock…` to access key material. |
+| `Unlocked` | This window can use encrypted keys. Closing it clears its session; reopening requires unlock. |
+| `Off` | New keys are stored as plaintext. Choose `Enable secure storage…` to set a fresh passphrase and encrypt existing plaintext entries. |
+| `Storage problem` | Storage or security metadata could not be read safely. Sensitive operations are blocked; `Retry storage` rereads the state. |
 
-Apply operation (double-click row, context menu Apply, or Apply button):
+Setup uses passphrase and confirmation fields together. Setup and unlock both
+provide `Show passphrase`; input is preserved exactly, including spaces, case,
+and Unicode. Passphrases must contain 1–1024 UTF-8 bytes. Successful setup or
+unlock encrypts any legacy plaintext entries. Cancelling either form, or entering
+an incorrect passphrase, leaves saved data and storage policy unchanged.
 
-```text
-KeymasterWindow._apply_selected_key()
-  -> write `shodan.api_key` via owner-scoped runtime config update (canonical shard-backed write)
-  -> km_store.touch_last_used(conn, key_id)
-  -> active-scan behavior: running scans keep start-time key; apply affects future scans only
-```
+**Delete, disable, and start again**
 
-Config path resolution:
-1. Canonical runtime config path (`~/.dirracuda/conf/config.json` compatibility view over shards).
-2. Explicit non-canonical paths are treated as internal/test-only compatibility surfaces.
+`Delete all keys and disable…` is available without the old passphrase, including
+when setup is incomplete or the store is locked. Its destructive confirmation
+covers **every Keymaster provider**, including Shodan keys and Analyst LLM tokens.
+Confirmation deletes the rows and passphrase metadata and persists storage off
+in one transaction. Cancellation changes nothing; a failed transaction retains
+the prior data and mode.
 
-Key table columns: `Label`, `Key Preview`, `Query Credits`, `Notes`, `Last Used`.
+Successful deletion clears the window's session, displayed entries, and cached
+credit results. Results from earlier credit checks are discarded, although a
+request already in progress may finish. The window stays `Off` and does not
+launch setup. Choose `Enable secure storage…` when ready to start again; new
+passphrase metadata, encryption of any subsequently saved plaintext entries,
+and the enabled policy are committed together.
 
-Key Preview format: keys longer than 8 characters show as `first4 + asterisks + last4`; shorter keys are fully masked.
+This action only clears Keymaster. Credentials already applied to configuration
+and separately held backups remain. Deletion is application-level removal,
+not forensic disk erasure. The desktop has no disable-and-retain-plaintext
+option. Historical off-mode stores that still contain passphrase metadata must
+be explicitly reset before creating a fresh passphrase.
 
-Keymaster sidecar schema (`experimental/keymaster/store.py`) includes:
+**Recovery messages**
 
-- `keymaster_keys` row metadata plus encrypted-at-rest fields (`key_ciphertext`, `key_fingerprint`, `is_encrypted`)
-- `keymaster_meta` policy/KDF metadata (secure-mode flag, KDF algorithm settings, salt, verifier)
+| Condition | Current behavior / recovery |
+| --- | --- |
+| Incorrect passphrase | Saved keys remain intact. Retry the exact passphrase, or deliberately delete and disable to start over. |
+| No passphrase configured | Choose `Set passphrase…` to complete setup. |
+| Damaged or incomplete security metadata | Unlock cannot proceed safely. Delete and disable is available to start over, with loss of all Keymaster entries. |
+| Previous passphrase still stored | Fresh setup cannot overwrite it; explicit reset is required before new setup. |
+| Expired unlock session | Unlock again; session material from an earlier store configuration cannot be reused. |
+| Storage cannot be accessed | Check file availability and permissions, then retry. Reset also requires writable storage. |
 
-Runtime state guards:
+**Encryption and persistence**
 
-- Schema/column/index checks run on sidecar open; failures raise explicit runtime errors.
-- Secure-mode CRUD/apply/query-credit operations require unlocked session material.
+PBKDF2-HMAC-SHA256 derives a root key using 600,000 iterations and a random
+32-byte salt. Persisted work factors are validated within 100,000–1,000,000
+iterations. HMAC purpose labels derive separate encryption and fingerprint
+subkeys. AES-GCM encrypts key material; a keyed HMAC-SHA256 fingerprint supports
+duplicate rejection. Equal keys within one store have equal fingerprints; these
+values are not displayed in the desktop or Web UI. Labels, notes, and usage
+metadata are not encrypted by this mechanism.
 
-Add/Edit modal: Label, API Key (masked entry; no reveal toggle in v1), Notes.
+The sidecar contains `keymaster_keys` (row metadata, ciphertext, fingerprint,
+and encryption flag) and `keymaster_meta` (storage policy, KDF settings, salt,
+and verifier). Schema, column, and index checks run on open. Setup refuses to
+overwrite existing or partial passphrase metadata or orphaned encrypted rows.
+Session root and subkeys are validated against current metadata before secure
+writes and cached-key actions, preventing pre-reset sessions from writing under
+obsolete keys.
 
-Delete: requires confirmation; no session-mute option in v1.
+`experimental/keymaster/store.py` owns persistence. Security operations use
+savepoints while leaving the final commit to the caller:
 
-#### Keymaster credit-check limits
+- `enable_secure_storage(conn, passphrase)` returns session keys and the number
+  of converted plaintext rows.
+- `destructive_reset(conn, *, secure_mode)` requires an explicit resulting mode;
+  desktop recovery passes `False`.
+- `validate_session_keys(conn, session_keys)` checks current session ownership.
+- `switch_secure_mode` remains a store conversion API, separate from the
+  desktop's delete-and-disable action.
 
-- Burst balance checks are capped at 5 saved keys.
-- Startup auto-check runs only when:
-  - `Auto check` is enabled
-  - saved key count is `<= 5`
-- When saved key count is `> 5`:
-  - startup auto-check is skipped (status-line message)
-  - `Recheck All` is disabled (button + context menu)
-  - `Recheck Selected` remains available
-- `Auto check` is persisted in GUI settings under `keymaster.auto_check_query_credits`.
+`gui/components/keymaster_security.py` owns desktop security state and forms;
+`gui/components/keymaster_window.py` owns the table and key actions.
+
+The fingerprint HMAC is keyed equality detection, not passphrase hashing.
+Its domain-separated key exists only after unlock and is not persisted.
+See [HMAC](https://www.rfc-editor.org/info/rfc2104) and
+[PBKDF2](https://www.rfc-editor.org/info/rfc8018) for the underlying constructions.
+
+**Saved keys and Apply**
+
+The table shows `Label`, `Key Preview`, `Query Credits`, `Notes`, and `Last Used`.
+For available keys longer than eight characters, previews show
+`first4 + asterisks + last4`; shorter keys are fully masked. Encrypted keys show
+`Locked` until unlocked. Add/Edit offers Label, a masked API Key field, and Notes.
+Deleting an individual entry requires confirmation.
+
+Select a key and use `Apply`, the context menu, or a double-click. Double-clicking
+a locked row opens unlock; after success, Apply reads that selected key from the
+store. Cancellation, an incorrect passphrase, or a missing selected entry leaves
+the active configuration unchanged.
+
+Apply writes `shodan.api_key` through the owner-scoped runtime config update and
+updates the key's Last Used timestamp. The canonical compatibility view is
+`~/.dirracuda/conf/config.json`, backed by configuration shards; explicit
+non-canonical paths are internal/test compatibility surfaces. Apply affects
+scans launched afterward: running scans retain their launch-time key. Queued
+scans resolve their key when launched, unless a run-specific override is supplied.
+Keymaster's encryption does not extend to credentials written to configuration.
+
+**Credit checks**
+
+- Burst checks cover at most five saved Shodan keys. Above five, startup checking
+  is skipped and `Recheck All` is disabled; `Recheck Selected` remains available
+  once key material is accessible.
+- Startup auto-check requires `Auto check` enabled and accessible key material.
+  Opening a locked store does not prompt or check credits. Unlock does not
+  automatically start a check; use `Recheck All` or `Recheck Selected` afterward.
+- `Auto check` is persisted as `keymaster.auto_check_query_credits` in GUI settings.
+
 
 Censys Discovery status:
 - Development suspended for now due free-tier API entitlement constraints on candidate-list query endpoints.

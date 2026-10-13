@@ -593,33 +593,46 @@ before migration. See [upgrade/recovery](docs/dev/dorkbook/U1_VALIDATION.md) and
 
 ### Keymaster
 
-Keymaster stores reusable Shodan API keys for rapid key rotation during testing.
+Keymaster stores reusable Shodan API keys so you can select which key future scans use.
+
+![Keymaster unlocked, showing the current storage controls and synthetic example keys](img/keymaster.png)
+
+*Example entries only; no live credentials or credit results are shown.*
 
 Quick start:
+
 1. Dashboard → `⚗ Accessories` → `Keymaster` tab.
 2. Click `Open Keymaster`.
 3. At `Setup needed`, choose `Set passphrase…` and enter a dedicated Keymaster passphrase twice.
-4. When reopening Keymaster, choose `Unlock…`. Opening the window does not prompt automatically.
-5. Add one or more keys with a label, API key, and optional notes.
-6. Select a key and click `Apply` (or double-click the row, or use the right-click menu).
+4. Add one or more keys with a label, API key, and optional notes.
+5. Select a key and click `Apply` (or double-click the row, or use the right-click menu).
+
+When reopening Keymaster, choose `Unlock…`. Opening the window does not prompt
+automatically; saved rows remain visible while locked. Double-clicking a locked
+row prompts for the passphrase, then applies that key after successful unlock.
 
 What Apply does:
+
 - Writes the selected key to `shodan.api_key` in the active config file.
-- Affects future scans only — a scan already running or queued continues with the key that was active at launch.
+- Affects scans launched afterward. A running scan keeps its launch-time key; a queued scan resolves its key when it starts, unless it has a run-specific override.
 
 Sidecar DB path: `~/.dirracuda/data/experimental/keymaster.db`
 
 Storage behavior:
+
 - The status reads `Off`, `Setup needed`, `Locked`, or `Unlocked`. New stores start at `Setup needed`; a storage error shows `Storage problem` with a retry action.
 - Secure storage encrypts saved key material at rest. Existing plaintext entries are encrypted on successful setup/unlock.
-- Setup and unlock preserve spaces and capitalization. Both forms offer `Show passphrase`; setup includes confirmation in the same form.
+- Setup and unlock preserve exact input, including spaces, capitalization, and Unicode. Both forms offer `Show passphrase`; setup includes confirmation in the same form. Closing Keymaster ends its unlock session.
 - To start over, choose `Delete all keys and disable…` and confirm. This requires **no old passphrase**, deletes every saved Keymaster entry (including Analyst LLM tokens), removes the passphrase, and leaves storage **off**.
 - With storage off, newly saved keys are plaintext. Choose `Enable secure storage…` to set a fresh passphrase and encrypt them. Old opt-out stores that retain passphrase metadata must be reset before fresh setup.
+- Cancelling setup, unlock, or the delete-and-disable confirmation leaves saved data and storage mode unchanged. An incorrect passphrase also leaves saved keys intact.
 - Reset does not clear credentials already applied to configuration or remove backups. It is application-level deletion, not secure disk erasure.
 
 Key table columns: `Label`, `Key Preview`, `Query Credits`, `Notes`, `Last Used`.
 
-Key Preview format: keys longer than 8 characters show as `first4 + asterisks`; shorter keys are fully masked.
+Key Preview format: available keys longer than 8 characters show as `first4 + asterisks + last4`; shorter keys are fully masked. Encrypted keys show `Locked` until unlocked.
+
+See the [technical reference](docs/TECHNICAL_REFERENCE.md#keymaster) for storage, recovery, and credit-check details.
 
 ### Sherlock
 

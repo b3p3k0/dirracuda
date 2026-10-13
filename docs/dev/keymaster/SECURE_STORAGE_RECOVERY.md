@@ -1,6 +1,6 @@
 # Keymaster secure storage recovery
 
-Status: KSR1–KSR4 accepted; KSR5 documentation review in progress, 2026-10-13.
+Status: KSR1–KSR5 implemented and accepted by a separate RA, 2026-10-13.
 Track: full process. PA/DA: primary session. RA: separate reviewer.
 
 ## Goal and evidence
@@ -256,3 +256,37 @@ synthetic entries in an isolated store, and retain recovery boundaries without
 turning the reference into an edit history. No product changes are planned.
 Validate links, screenshot readability, and behavioral accuracy; a separate RA
 reviews and accepts this documentation card. Rollback uses a new revert commit.
+
+KSR5 accepted by separate RA on 2026-10-13. README and the technical reference
+describe current controls, exact-input passphrases, reset boundaries, Apply,
+storage internals, and credit checks. Dialog-remediation and acceptance history
+remain in this development packet. The refreshed screenshot shows the current
+unlocked window with two synthetic entries and no queried credit results.
+
+RA required one accuracy correction: queued scans do not universally retain
+the key from queue creation. `dashboard_scan.launch_next_queued_scan` builds
+each protocol's options at launch; without `api_key_override`, the backend
+loads current effective configuration. Both manuals now distinguish running
+scans from queued scans and explain run-specific overrides. No product change
+was needed. This illustrates why copying a prior manual statement is not a
+substitute for checking runtime behavior.
+
+DA screenshot command:
+`xvfb-run -a -s '-screen 0 1280x800x24' ./venv/bin/python
+/tmp/keymaster-doc-capture.py` reported **PASS: captured current Keymaster;
+two synthetic keys; no callback errors or external operations**. RA inspected
+the capture harness and image. The harness used a disposable dialog-audit
+environment; no live keys or configuration were accessed.
+
+Independent RA checks with `./venv/bin/python - <<'PY'` verified README targets,
+the unique technical-reference Keymaster anchor, and PNG integrity at
+1000×490 pixels: **PASS: README targets, unique Keymaster anchor, PNG integrity
+(1000x490)**. `git diff --check` passed. Product tests were not repeated for this
+documentation-only card. No Blocker or Required findings remain.
+
+Historical disposition retained from the prior technical reference: CodeQL
+alert #23 was documented as a false positive because the flagged HMAC performs
+keyed duplicate detection, not passphrase hashing. Its domain-separated key is
+derived after PBKDF2 and is not persisted. This records the previous disposition;
+the current remote alert state was not checked during KSR5. The manuals retain
+the cryptographic architecture explanation without alert-triage history.
